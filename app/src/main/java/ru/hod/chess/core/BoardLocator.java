@@ -67,7 +67,7 @@ public final class BoardLocator {
         Scored best = candidates.get(0);
         boolean ambiguous = candidates.stream().skip(1).anyMatch(s ->
                 s.score() >= best.score() - .025f && !sameBoard(best.region(), s.region()));
-        BoardVision.Region r = best.region();
+        BoardVision.Region r = refine(pixels,width,height,best.region());
         boolean initial = true;
         float topInk = 0, bottomInk = 0;
         for (int square = 0; square < 64; square++) {
@@ -80,8 +80,31 @@ public final class BoardLocator {
             if (row == 6) bottomInk += feature.ink();
         }
         float difference = (bottomInk - topInk) / 8f;
-        return new Detection(r, best.score(), difference >= 0,
+        return new Detection(r, gridScore(pixels,width,r), difference >= 0,
                 initial ? Math.min(1, Math.abs(difference) / .28f) : 0, initial, ambiguous);
+    }
+
+    private static BoardVision.Region refine(int[] pixels,int width,int height,BoardVision.Region seed){
+        BoardVision.Region best=seed;float score=edgeStrength(pixels,width,seed);
+        int radius=Math.max(3,Math.min(6,seed.size()/120));float minimum=gridScore(pixels,width,seed)-.016f;
+        for(int size=seed.size()-radius;size<=seed.size()+radius;size++)
+            for(int left=seed.left()-radius;left<=seed.left()+radius;left++)
+                for(int top=seed.top()-radius;top<=seed.top()+radius;top++){
+                    BoardVision.Region r=new BoardVision.Region(left,top,size);if(!r.inside(width,height))continue;
+                    float value=edgeStrength(pixels,width,r);
+                    if(value>score+.001f&&gridScore(pixels,width,r)>=minimum){score=value;best=r;}
+                }
+        return best;
+    }
+    private static float edgeStrength(int[] pixels,int width,BoardVision.Region r){
+        float sum=0,cell=r.size()/8f;
+        for(int edge=1;edge<8;edge++)for(int along=0;along<8;along++)for(float inset:new float[]{.12f,.88f}){
+            int x=r.left()+Math.round(edge*cell),y=r.top()+Math.round((along+inset)*cell);
+            sum+=Math.min(30_000,distance(pixels[y*width+x-1],pixels[y*width+x+1]));
+            x=r.left()+Math.round((along+inset)*cell);y=r.top()+Math.round(edge*cell);
+            sum+=Math.min(30_000,distance(pixels[(y-1)*width+x],pixels[(y+1)*width+x]));
+        }
+        return sum/(224f*30_000f);
     }
 
     public static boolean near(BoardVision.Region a, BoardVision.Region b) {
@@ -104,6 +127,14 @@ public final class BoardLocator {
         for (int i = 1; i < length; i++) {
             int color = image[vertical ? i * w + line : line * w + i];
             if (distance(color, reference) > 35 * 35) {
+                // A one-pixel antialiased/JPEG border is not another square.
+                // Commit a new run only when its color survives three samples.
+                boolean stable = i + 2 < length;
+                for (int j = 1; stable && j <= 2; j++) {
+                    int next = image[vertical ? (i + j) * w + line : line * w + i + j];
+                    if (distance(next, color) > 35 * 35) stable = false;
+                }
+                if (!stable) continue;
                 result.add(new Run(start, i, reference));
                 start = i;
                 reference = color;
@@ -117,10 +148,7 @@ public final class BoardLocator {
                                 int maxSize, int axisLength, List<Span> output) {
         for (int count : new int[]{8, 6}) {
             for (int i = 0; i + count <= runs.size(); i++) {
-                int[] widths = new int[count];
-                for (int j = 0; j < count; j++) widths[j] = runs.get(i + j).length();
-                Arrays.sort(widths);
-                float cell = widths[count / 2];
+                float cell = (runs.get(i + count - 1).end() - runs.get(i).start()) / (float) count;
                 if (cell < minimumCell || cell * 8 > maxSize + 2
                         || expectedCell > 0 && Math.abs(cell - expectedCell) > Math.max(2, expectedCell * .06f)) continue;
                 Run a = runs.get(i), b = runs.get(i + 1);
@@ -163,11 +191,21 @@ public final class BoardLocator {
         }
         int[] colors = {medianColor(samples[0]), medianColor(samples[1])};
         if (distance(colors[0], colors[1]) < 35 * 35) return 0;
-        int matches = 0;
-        for (int parity = 0; parity < 2; parity++) for (int color : samples[parity]) {
-            if (distance(color, colors[parity]) <= 42 * 42) matches++;
+        int normal = 0, highlighted = 0;
+        for (int parity = 0; parity < 2; parity++) for (int i = 0; i < 128; i += 4) {
+            int matches = 0;
+            int[] corners = Arrays.copyOfRange(samples[parity], i, i + 4);
+            for (int color : corners) if (distance(color, colors[parity]) <= 42 * 42) matches++;
+            // Coordinates/shadows may cover one corner. A highlighted last-move
+            // square is uniformly recolored; it does not invalidate the 8x8 grid.
+            if (matches >= 3) normal++;
+            else {
+                int median = medianColor(corners), uniform = 0;
+                for (int color : corners) if (distance(color, median) <= 42 * 42) uniform++;
+                if (uniform >= 3) highlighted++;
+            }
         }
-        return matches / 256f;
+        return (normal + (highlighted <= 4 ? highlighted : 0)) / 64f;
     }
 
     private static int medianColor(int[] colors) {

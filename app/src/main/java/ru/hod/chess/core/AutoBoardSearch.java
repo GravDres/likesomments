@@ -20,9 +20,9 @@ public final class AutoBoardSearch {
             pending = null;
             return result(State.SEARCHING, null, null, "Ищу доску · открой Chess.com");
         }
-        if (!d.automatic()) {
+        if (d.ambiguous()) {
             pending = null;
-            return result(State.UNCERTAIN_GRID, d, null, "Найдена возможная доска · нужна проверка сетки");
+            return result(State.UNCERTAIN_GRID, d, null, "Нужна проверка сетки · «Проверить»");
         }
         if (pending != null && BoardLocator.near(pending.calibration().region(), d.region())) {
             Calibration c = pending.calibration();
@@ -54,11 +54,14 @@ public final class AutoBoardSearch {
                 return result(State.NEED_ORIENTATION, d, null, "Ориентация неоднозначна · проверь сторону доски");
             }
         }
+        if(!d.automatic()){
+            return result(State.UNCERTAIN_GRID,d,null,"Проверь сетку · кнопка «Проверить»");
+        }
         if (!d.initialLayout()) {
-            if(game!=null&&!game.history().isEmpty())return result(State.NEED_HISTORY,d,null,"Доска найдена · восстанавливаю продолжение сохранённой партии");
+            if(game!=null&&(!game.history().isEmpty()||!game.initial().fen().equals(Position.START)))return result(State.NEED_HISTORY,d,null,"История не совпала · нажми «Позиция»");
             return result(State.NEED_INITIAL, d, null, "Доска найдена · для первого обучения нужна начальная расстановка");
         }
-        if(game!=null&&!game.history().isEmpty()){
+        if(game!=null&&(!game.history().isEmpty()||!game.initial().fen().equals(Position.START))){
             return result(State.NEED_NEW_GAME,d,null,"Начальная расстановка другой партии · нажми «Новая партия»");
         }
         if (!d.orientationKnown()) {

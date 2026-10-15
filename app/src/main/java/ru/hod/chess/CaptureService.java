@@ -29,7 +29,8 @@ public final class CaptureService extends Service {
     private final AtomicBoolean processing=new AtomicBoolean();private final AtomicLong epoch=new AtomicLong(),searchEpoch=new AtomicLong();
     private final AtomicBoolean arrowActive=new AtomicBoolean();
     private volatile boolean destroyed,paused,selecting,preparingSelection;private volatile long selectAfter;private volatile Frame latest;private volatile BoardVision.Region region;
-    private volatile ChessEngine engine;private Future<?> search;private FloatingPanel panel;private BoardSelector selector;
+    private volatile ChessEngine engine;private Future<?> search;private FloatingPanel panel;private BoardSelector selector;private PositionReview review;
+    private volatile boolean reviewRequested;private volatile BoardVision.Region rememberedRegion,selectionRegion;
     private ArrowOverlay arrows;
     private volatile Guide guide;
     private final CleanFrameGate cleanFrames=new CleanFrameGate();
@@ -51,7 +52,7 @@ public final class CaptureService extends Service {
         boolean sameArea(Frame other){return other!=null&&width==other.width&&height==other.height&&left==other.left&&top==other.top;}
     }
     private record Guide(ArrowGeometry shape, Frame clean) {}
-    private record Confirmed(Position position,List<Move> moves,Frame frame) {}
+    private record Confirmed(Position initial,Position position,List<Move> moves,Frame frame) {}
     private record AutoAttempt(AutoBoardSearch.Result result,Frame frame) {}
     @Override public IBinder onBind(Intent intent){return null;}
     @Override public int onStartCommand(Intent intent,int flags,int id){
@@ -81,12 +82,14 @@ public final class CaptureService extends Service {
     }
     private void initialize(){
         foreground(false);captureThread=new HandlerThread("screen-frames");captureThread.start();capture=new Handler(captureThread.getLooper());
-        arrows=new ArrowOverlay(this);playerSide=prefs().getBoolean("playerWhite",true)?PlayerSide.WHITE:PlayerSide.BLACK;sessionStore=new SessionStore(this);
+        arrows=new ArrowOverlay(this);whiteBottom=prefs().getBoolean("whiteBottom",true);playerSide=prefs().getBoolean("playerWhite",true)?PlayerSide.WHITE:PlayerSide.BLACK;sessionStore=new SessionStore(this);
         try{GameMemory.Restored saved=sessionStore.load();if(saved!=null){vision=saved.vision();tracker=saved.game();}}catch(java.io.IOException e){captureProblem="Сохранённая партия не читается · начни новую";}
         panel=new FloatingPanel(this,new FloatingPanel.Actions(){
             public void calibrate(){if(capturing)startAutomaticSearch();else requestCapture();}
             public void manual(){if(capturing)selectBoard();else requestCapture();}
             public void recover(){recoverAssistant();}
+            public void verify(){if(capturing)selectBoard();else requestCapture();}
+            public void review(){if(capturing)selectPosition();else requestCapture();}
             public void side(PlayerSide side){changeSide(side);}public void newGame(){startNewGame();}
             public void pause(boolean value){setPaused(value);}
             public void arrows(boolean value){prefs().edit().putBoolean("arrows",value).apply();if(!value)hideArrow();}
@@ -114,7 +117,7 @@ public final class CaptureService extends Service {
     private void warmEngine(){engineQueue.submit(()->{try{if(engine!=null||destroyed||!capturing)return;ChessEngine ready=EngineFactory.create(this,engineThreads());if(destroyed||!capturing)ready.close();else engine=ready;}catch(Exception e){main.post(()->{if(!destroyed)panel.message("Stockfish не запустился: "+e.getMessage());});}});}
     private synchronized void releaseCapture(){
         capturing=false;automaticRetryAt=0;++captureGeneration;epoch.incrementAndGet();automaticSearch=false;selecting=false;preparingSelection=false;boardVerified=false;region=null;confirmed=null;stability.clear();invalidateSearch();
-        if(selector!=null){selector.close();selector=null;}
+        if(selector!=null){selector.close();selector=null;}if(review!=null){review.close();review=null;}
         VirtualDisplay oldDisplay=display;ImageReader oldReader=reader;MediaProjection oldProjection=projection;display=null;reader=null;projection=null;latest=null;cleanFrames.reset();
         if(capture!=null)capture.post(()->{try{if(oldDisplay!=null)oldDisplay.release();}catch(RuntimeException ignored){}try{if(oldReader!=null)oldReader.close();}catch(RuntimeException ignored){}try{if(oldProjection!=null)oldProjection.stop();}catch(RuntimeException ignored){}});
         ChessEngine old=engine;engine=null;if(old!=null)old.close();
@@ -125,7 +128,7 @@ public final class CaptureService extends Service {
     private void requestCapture(){startActivity(new Intent(this,MainActivity.class).setAction(RESUME_CAPTURE).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_SINGLE_TOP));}
     private synchronized void recoverAssistant(){
         if(destroyed)return;if(!capturing){requestCapture();return;}
-        if(paused){paused=false;panel.setPaused(false);}automaticSearch=false;selecting=false;preparingSelection=false;if(selector!=null){selector.close();selector=null;}
+        if(paused){paused=false;panel.setPaused(false);}automaticSearch=false;selecting=false;preparingSelection=false;if(selector!=null){selector.close();selector=null;}if(review!=null){review.close();review=null;}
         startAutomaticSearch();
     }
     private final Runnable healthCheck=new Runnable(){public void run(){
@@ -153,7 +156,7 @@ public final class CaptureService extends Service {
     }
     private ImageReader createReader(int w,int h){ImageReader r=ImageReader.newInstance(w,h,PixelFormat.RGBA_8888,2);r.setOnImageAvailableListener(this::onImage,capture);return r;}
     private synchronized void resize(int w,int h){
-        if(destroyed)return;boardVerified=false;stability.clear();ImageReader old=reader;ImageReader next=createReader(w,h);display.setSurface(null);display.resize(w,h,getResources().getConfiguration().densityDpi);display.setSurface(next.getSurface());reader=next;width=w;height=h;if(old!=null)old.close();latest=null;region=null;preparingSelection=false;automaticSearch=false;epoch.incrementAndGet();invalidateSearch();main.post(()->{if(selector!=null){selector.close();selector=null;}selecting=false;if(panel!=null){panel.message("Размер изменился · ищу доску заново");if(!paused)startAutomaticSearch();}});
+        if(destroyed)return;boardVerified=false;stability.clear();ImageReader old=reader;ImageReader next=createReader(w,h);display.setSurface(null);display.resize(w,h,getResources().getConfiguration().densityDpi);display.setSurface(next.getSurface());reader=next;width=w;height=h;if(old!=null)old.close();latest=null;region=null;rememberedRegion=null;preparingSelection=false;automaticSearch=false;epoch.incrementAndGet();invalidateSearch();main.post(()->{if(selector!=null){selector.close();selector=null;}if(review!=null){review.close();review=null;}selecting=false;if(panel!=null){panel.message("Размер изменился · ищу доску заново");if(!paused)startAutomaticSearch();}});
     }
     private void onImage(ImageReader source){
         if(destroyed)return;
@@ -173,7 +176,7 @@ public final class CaptureService extends Service {
             // boundary before calibration or recognition can consume this image.
             if(guide==null&&(arrowActive.get()||cleanVersion!=cleanFrames.version()))return;
             if(automaticSearch){if(now>=automaticAfter&&processing.compareAndSet(false,true)){long gen=epoch.get();AutoBoardSearch finder=automaticFinder;visionQueue.execute(()->{try{probeAutomatic(f,finder,gen);}catch(Exception e){main.post(()->{if(gen==epoch.get()&&!destroyed){automaticSearch=false;automaticRetryAt=SystemClock.elapsedRealtime()+5000;panel.setCompact(true);panel.message("Не удалось найти доску · нажми «Найти доску»");}});}finally{processing.set(false);}});}return;}
-            if(preparingSelection){if(now>=selectAfter){preparingSelection=false;selecting=true;long gen=epoch.get();main.post(()->openSelector(f,gen));}return;}
+            if(preparingSelection){if(now>=selectAfter){preparingSelection=false;selecting=true;long gen=epoch.get();boolean position=reviewRequested;main.post(()->{if(position)openReview(f,gen);else openSelector(f,gen);});}return;}
             if(paused||region==null)return;
             BoardVision.Region selected=region;long gen=epoch.get();
             if(panel!=null&&panel.overlaps(selected)){boardVerified=false;stability.clear();hideArrow();main.post(()->{if(panel!=null)panel.message("Окно перекрывает доску");});return;}
@@ -209,7 +212,7 @@ public final class CaptureService extends Service {
             if(update.status()==GameTracker.Status.UNRECOGNIZED||update.status()==GameTracker.Status.AMBIGUOUS||update.status()==GameTracker.Status.RECOVERY_LIMIT){
                 boardVerified=false;hideArrow();if(++badFrames==3)main.post(()->{if(panel!=null)panel.message("Восстанавливаю пропущенные ходы · история сохранена. ↻ повторить поиск");});return;
             }
-            badFrames=0;frameErrors=0;lastGoodAt=SystemClock.elapsedRealtime();boardVerified=true;currentConfidence=o.confidence();Position p=game.position();confirmed=new Confirmed(p,game.history(),f);
+            badFrames=0;frameErrors=0;lastGoodAt=SystemClock.elapsedRealtime();boardVerified=true;currentConfidence=o.confidence();Position p=game.position();confirmed=new Confirmed(game.initial(),p,game.history(),f);
             if(update.status()==GameTracker.Status.MOVED)saveSession(game,model);
             if(p.legalMoves().isEmpty()){invalidateSearch();main.post(()->{if(panel!=null&&gen==epoch.get())panel.terminal(p);});return;}
             String draw=game.automaticDraw();if(draw!=null){invalidateSearch();main.post(()->{if(panel!=null&&gen==epoch.get())panel.draw(draw);});return;}
@@ -234,7 +237,7 @@ public final class CaptureService extends Service {
     }
     private synchronized void startNewGame(){
         if(destroyed)return;invalidateSearch();epoch.incrementAndGet();automaticSearch=false;preparingSelection=false;selecting=false;
-        if(selector!=null){selector.close();selector=null;}boardVerified=false;confirmed=null;region=null;stability.clear();
+        if(selector!=null){selector.close();selector=null;}if(review!=null){review.close();review=null;}boardVerified=false;confirmed=null;region=null;stability.clear();
         // Queue the reset behind any in-flight recognition and persistence operation.
         engineQueue.submit(()->{try{if(engine instanceof UciEngine nativeEngine)nativeEngine.newGame();}catch(Exception e){ChessEngine old=engine;engine=null;if(old!=null)old.close();}});
         visionQueue.execute(()->{synchronized(CaptureService.this){if(destroyed)return;tracker=new GameTracker(Position.start());vision=null;sessionStore.clear();}main.post(()->{if(!destroyed&&!paused&&capturing)startAutomaticSearch();});});
@@ -256,7 +259,7 @@ public final class CaptureService extends Service {
                 if(engine instanceof UciEngine nativeEngine)nativeEngine.configure(threads,1);
                 if(token!=searchEpoch.get())return;
                 java.util.function.Consumer<Analysis> report=a->{synchronized(CaptureService.this){if(token!=searchEpoch.get()||gen!=epoch.get()||destroyed||paused||!playerSide.ownsTurn(p))return;lastAnalysis=a;long now=SystemClock.elapsedRealtime();if(now-lastUiReport<180)return;lastUiReport=now;}main.post(()->{if(panel!=null&&token==searchEpoch.get()&&gen==epoch.get()&&!paused&&boardVerified&&playerSide.ownsTurn(p))panel.show(p,a,confidence,false,snapshot.moves().size());});};
-                if(engine instanceof UciEngine nativeEngine)nativeEngine.analyzeGame(p,snapshot.moves(),millis,report);else engine.analyze(p,millis,report);
+                if(engine instanceof UciEngine nativeEngine)nativeEngine.analyzeGame(snapshot.initial(),p,snapshot.moves(),millis,report);else engine.analyze(p,millis,report);
                 synchronized(CaptureService.this){if(token==searchEpoch.get()&&gen==epoch.get()&&!destroyed&&!paused){analysisComplete=true;engineStartedAt=0;Analysis finalResult=lastAnalysis;if(finalResult!=null)main.post(()->{if(token==searchEpoch.get()&&gen==epoch.get()&&boardVerified&&playerSide.ownsTurn(p)&&!paused){panel.show(p,finalResult,confidence,true,snapshot.moves().size());showArrow(p,finalResult,gen,token);}});}}
             }catch(Exception e){ChessEngine old=engine;engine=null;if(old!=null)old.close();synchronized(this){if(token==searchEpoch.get())analyzedPosition=null;}main.post(()->{if(panel!=null&&token==searchEpoch.get())panel.message("Движок недоступен · "+e.getMessage());});}
         });
@@ -291,24 +294,35 @@ public final class CaptureService extends Service {
         synchronized(this){
             if(destroyed||!automaticSearch||gen!=epoch.get())return;
             automaticAttempt=new AutoAttempt(result,f);
+            if(result.detection()!=null){rememberedRegion=result.detection().region();main.post(()->{if(gen==epoch.get()&&!destroyed)panel.message(result.message());});}
             if(result.detection()!=null&&panel.overlaps(result.detection().region())){automaticAfter=SystemClock.elapsedRealtime()+300;main.post(()->{if(gen==epoch.get()&&!destroyed)panel.placeOutside(result.detection().region(),f.width(),f.height());});return;}
             if(result.state()!=AutoBoardSearch.State.READY)return;
             AutoBoardSearch.Calibration calibration=result.calibration();
             vision=calibration.vision();if(!calibration.reuseGame())tracker=new GameTracker(Position.start());saveSession(tracker,vision);
             whiteBottom=calibration.whiteBottom();prefs().edit().putBoolean("whiteBottom",whiteBottom).apply();
-            stability.clear();boardVerified=false;badFrames=0;region=calibration.region();selecting=true;automaticSearch=false;
+            stability.clear();boardVerified=false;badFrames=0;region=calibration.region();rememberedRegion=region;selecting=true;automaticSearch=false;
             main.post(()->{if(gen==epoch.get()&&!destroyed){panel.placeOutside(calibration.region(),f.width(),f.height());panel.message("Доска найдена · "+(whiteBottom?"белые снизу":"чёрные снизу"));if(calibration.reuseGame()){selecting=false;cleanFrames.reset();}else markBoard(calibration.region(),gen);}});
         }
     }
     private synchronized void automaticTimeout(long gen){
         if(destroyed||gen!=epoch.get()||!automaticSearch)return;
         automaticSearch=false;automaticRetryAt=SystemClock.elapsedRealtime()+5000;long next=epoch.incrementAndGet();AutoAttempt attempt=automaticAttempt;
-        if(attempt!=null&&(tracker==null||tracker.history().isEmpty())&&(attempt.result().state()==AutoBoardSearch.State.UNCERTAIN_GRID||attempt.result().state()==AutoBoardSearch.State.NEED_ORIENTATION)){
+        if(attempt!=null&&(tracker==null||tracker.history().isEmpty()&&tracker.initial().fen().equals(Position.START))&&(attempt.result().state()==AutoBoardSearch.State.UNCERTAIN_GRID||attempt.result().state()==AutoBoardSearch.State.NEED_ORIENTATION)){
             BoardLocator.Detection detected=attempt.result().detection();whiteBottom=detected.orientationKnown()?detected.whiteBottom():prefs().getBoolean("whiteBottom",true);
             selecting=true;openSelector(attempt.frame(),next,detected.region());return;
         }
         panel.setCompact(true);
-        panel.message(attempt==null?"Нет кадра экрана · проверь разрешение захвата":attempt.result().message()+" · нажми «Найти доску»");
+        if(attempt==null)panel.message("Нет кадра экрана · нажми ↻");
+        else{
+            AutoBoardSearch.State state=attempt.result().state();
+            if(state==AutoBoardSearch.State.NEED_HISTORY||state==AutoBoardSearch.State.NEED_NEW_GAME||state==AutoBoardSearch.State.NEED_ORIENTATION||state==AutoBoardSearch.State.UNCERTAIN_GRID)automaticRetryAt=0;
+            panel.message(switch(state){
+                case NEED_HISTORY -> "История не совпала\nНажми «Позиция», чтобы продолжить";
+                case UNCERTAIN_GRID,NEED_ORIENTATION -> "Нужна проверка сетки\nНажми «Проверить»";
+                case NEED_INITIAL -> "Нужна начальная доска\nили подтверждение через «Позиция»";
+                default -> attempt.result().message();
+            });
+        }
         if(attempt!=null&&attempt.result().detection()!=null){BoardVision.Region found=attempt.result().detection().region();panel.placeOutside(found,attempt.frame().width(),attempt.frame().height());markBoard(found,next);}
     }
     private synchronized void markBoard(BoardVision.Region found,long gen){
@@ -317,11 +331,45 @@ public final class CaptureService extends Service {
         try{arrows.showOutline(found);}catch(RuntimeException e){hideArrow();selecting=false;return;}
         main.postDelayed(()->{if(!destroyed&&gen==epoch.get()&&guide==null){hideArrow();selecting=false;}},800);
     }
-    private void selectBoard(){if(latest==null){Toast.makeText(this,"Жду первый кадр экрана",Toast.LENGTH_SHORT).show();return;}if(selecting||preparingSelection||automaticSearch)return;invalidateSearch();long gen=epoch.incrementAndGet();whiteBottom=prefs().getBoolean("whiteBottom",true);panel.prepareSearch();selectAfter=SystemClock.elapsedRealtime()+250;preparingSelection=true;
-        main.postDelayed(()->{if(preparingSelection&&gen==epoch.get()){preparingSelection=false;panel.message("Нет свежего кадра · открой Chess.com и попробуй снова");}},4000);
+    private void selectBoard(){prepareManual(false);}
+    private void selectPosition(){prepareManual(true);}
+    private synchronized void prepareManual(boolean position){
+        if(!capturing||destroyed)return;if(selecting||preparingSelection){Toast.makeText(this,"Сначала заверши открытую проверку",Toast.LENGTH_SHORT).show();return;}
+        if(latest==null){panel.message("Жду кадр экрана · попробуй снова через секунду");return;}
+        automaticSearch=false;automaticRetryAt=0;invalidateSearch();long gen=epoch.incrementAndGet();boardVerified=false;
+        reviewRequested=position;selectionRegion=region!=null?region:rememberedRegion;whiteBottom=vision!=null?vision.whiteBottom():prefs().getBoolean("whiteBottom",true);
+        if(selectionRegion!=null&&selectionRegion.inside(width,height))panel.placeOutside(selectionRegion,width,height);else panel.prepareSearch();
+        panel.message(position?"Готовлю проверку текущей позиции…":"Проверь найденную сетку и нажми «Готово»");selectAfter=SystemClock.elapsedRealtime()+200;preparingSelection=true;
+        main.postDelayed(()->{if(preparingSelection&&gen==epoch.get()){preparingSelection=false;panel.message("Нет свежего кадра · ↻ подключить экран снова");}},5000);
+    }
+    private void openReview(Frame snapshot,long gen){
+        if(destroyed||gen!=epoch.get()){selecting=false;return;}
+        BoardVision.Region selected=selectionRegion;
+        if(selected==null||!selected.inside(snapshot.width(),snapshot.height())){BoardLocator.Detection found=new BoardLocator().find(snapshot.pixels(),snapshot.width(),snapshot.height());selected=found==null?null:found.region();}
+        if(selected==null){selecting=false;panel.message("Не вижу границы доски · сначала нажми «Проверить»");return;}
+        BoardVision.Region chosen=selected;Position reference=tracker==null?Position.start():tracker.position();
+        char[] pieces=reference.pieces();
+        if(vision!=null)try{pieces=vision.withOrientation(whiteBottom).recognize(snapshot.pixels(),snapshot.width(),snapshot.height(),chosen).board();}catch(RuntimeException ignored){}
+        try{review=new PositionReview(this,pieces,reference,whiteBottom,choice->{
+            review=null;panel.message("Проверяю подтверждённую позицию…");
+            visionQueue.execute(()->{try{
+                BoardVision previous=vision==null?new BoardVision(choice.whiteBottom()):vision.withOrientation(choice.whiteBottom());
+                BoardVision model=previous.learnConfirmed(snapshot.pixels(),snapshot.width(),snapshot.height(),chosen,choice.position());
+                BoardVision.Observation observed=model.recognize(snapshot.pixels(),snapshot.width(),snapshot.height(),chosen);
+                if(observed.uncertain()!=0||!choice.position().matches(observed.board()))throw new IllegalArgumentException("Фигуры на кадре не совпали с подтверждёнными. Проверь клетки ещё раз");
+                synchronized(CaptureService.this){if(destroyed||gen!=epoch.get())return;
+                    GameTracker keep=tracker;boolean same=keep!=null&&keep.position().fen().equals(choice.position().fen());
+                    tracker=same?keep:new GameTracker(choice.position());vision=model;whiteBottom=choice.whiteBottom();prefs().edit().putBoolean("whiteBottom",whiteBottom).apply();
+                    region=chosen;rememberedRegion=chosen;confirmed=null;boardVerified=false;badFrames=0;stability.clear();saveSession(tracker,vision);
+                }
+                engineQueue.submit(()->{try{if(engine instanceof UciEngine nativeEngine)nativeEngine.newGame();}catch(Exception e){ChessEngine old=engine;engine=null;if(old!=null)old.close();}});
+                main.post(()->{if(!destroyed&&gen==epoch.get()){selecting=false;panel.placeOutside(chosen,snapshot.width(),snapshot.height());panel.message("Позиция подтверждена · продолжаю");}});
+            }catch(Exception e){main.post(()->{if(!destroyed&&gen==epoch.get()){selecting=false;panel.message("Не удалось восстановить: "+e.getMessage());}});}});
+        },()->{review=null;selecting=false;panel.message("Проверка отменена · история сохранена");});}
+        catch(RuntimeException e){selecting=false;panel.message("Не удалось открыть проверку: "+e.getMessage());}
     }
     private void openSelector(Frame snapshot,long gen){
-        openSelector(snapshot,gen,null);
+        openSelector(snapshot,gen,selectionRegion!=null&&selectionRegion.inside(snapshot.width(),snapshot.height())?selectionRegion:null);
     }
     private void openSelector(Frame snapshot,long gen,BoardVision.Region initial){
         if(destroyed||gen!=epoch.get()){selecting=false;return;}
@@ -330,19 +378,19 @@ public final class CaptureService extends Service {
             visionQueue.execute(()->{try{
                 BoardVision model=vision==null?null:vision.withOrientation(choice.whiteBottom());GameTracker previous=tracker;
                 boolean reuse=false;if(model!=null&&previous!=null){BoardVision.Observation seen=model.recognize(snapshot.pixels(),snapshot.width(),snapshot.height(),choice.region());GameTracker trial=new GameTracker(previous.position());reuse=seen.uncertain()==0&&(trial.recover(seen.board()).status()==GameTracker.Status.SAME||trial.position().matches(seen.board()));}
-                if(!reuse){if(previous!=null&&!previous.history().isEmpty())throw new IllegalArgumentException("История сохранена. Для другой игры нажми «Новая партия»");model=new BoardVision(choice.whiteBottom());model.calibrate(snapshot.pixels(),snapshot.width(),snapshot.height(),choice.region());}
+                if(!reuse){if(previous!=null&&(!previous.history().isEmpty()||!previous.initial().fen().equals(Position.START)))throw new IllegalArgumentException("История не совпала. Для продолжения текущей игры нажми «Позиция»");model=new BoardVision(choice.whiteBottom());model.calibrate(snapshot.pixels(),snapshot.width(),snapshot.height(),choice.region());}
                 synchronized(CaptureService.this){if(gen!=epoch.get()||destroyed)return;
                 vision=model;if(!reuse)tracker=new GameTracker(Position.start());saveSession(tracker,vision);whiteBottom=choice.whiteBottom();prefs().edit().putBoolean("whiteBottom",whiteBottom).apply();
-                stability.clear();boardVerified=false;badFrames=0;region=choice.region();}
+                stability.clear();boardVerified=false;badFrames=0;region=choice.region();rememberedRegion=region;}
                 main.post(()->{if(gen==epoch.get()&&!destroyed){panel.placeOutside(choice.region(),snapshot.width(),snapshot.height());panel.message("Доска готова · жду стабильный кадр");markBoard(choice.region(),gen);}});
             }catch(Exception e){main.post(()->{if(gen==epoch.get()&&!destroyed){selecting=false;panel.message("Калибровка не удалась: "+e.getMessage());}});}});
         },()->{selector=null;selecting=false;panel.message("Проверка отменена · можно повторить автопоиск");});}
         catch(Exception e){selecting=false;panel.message("Не удалось проверить доску: "+e.getMessage());}
     }
-    private synchronized void setPaused(boolean value){paused=value;boardVerified=false;stability.clear();invalidateSearch();if(value){automaticSearch=false;preparingSelection=false;selecting=false;if(selector!=null){selector.close();selector=null;}epoch.incrementAndGet();panel.message("На паузе · захват не обрабатывается");}else{epoch.incrementAndGet();panel.message("Продолжаю · жду стабильную позицию");if(region==null)startAutomaticSearch();}}
+    private synchronized void setPaused(boolean value){paused=value;boardVerified=false;stability.clear();invalidateSearch();if(value){automaticSearch=false;preparingSelection=false;selecting=false;if(selector!=null){selector.close();selector=null;}if(review!=null){review.close();review=null;}epoch.incrementAndGet();panel.message("На паузе · захват не обрабатывается");}else{epoch.incrementAndGet();panel.message("Продолжаю · жду стабильную позицию");if(region==null)startAutomaticSearch();}}
     private android.content.SharedPreferences prefs(){return getSharedPreferences("hod",MODE_PRIVATE);}
     @Override public synchronized void onDestroy(){
-        destroyed=true;running=false;capturing=false;automaticSearch=false;main.removeCallbacks(healthCheck);epoch.incrementAndGet();invalidateSearch();if(selector!=null)selector.close();if(panel!=null)panel.close();if(arrows!=null)arrows.close();confirmed=null;
+        destroyed=true;running=false;capturing=false;automaticSearch=false;main.removeCallbacks(healthCheck);epoch.incrementAndGet();invalidateSearch();if(selector!=null)selector.close();if(review!=null)review.close();if(panel!=null)panel.close();if(arrows!=null)arrows.close();confirmed=null;
         visionQueue.shutdownNow();engineQueue.shutdownNow();ChessEngine e=engine;if(e!=null)e.close();
         // Release capture resources on their owning thread, after any in-flight image callback.
         if(capture!=null)capture.post(()->{if(display!=null)display.release();if(reader!=null)reader.close();latest=null;if(projection!=null)projection.stop();captureThread.quitSafely();});

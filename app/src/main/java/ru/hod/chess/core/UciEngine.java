@@ -40,7 +40,10 @@ public final class UciEngine implements ChessEngine {
     }
     /** Keep the actual game history so Stockfish can evaluate repetitions correctly. */
     public synchronized void analyzeGame(Position expected,List<Move> history,int millis,Consumer<Analysis> progress)throws Exception{
-        Position replay=Position.start();StringBuilder command=new StringBuilder("position startpos");
+        analyzeGame(Position.start(),expected,history,millis,progress);
+    }
+    public synchronized void analyzeGame(Position initial,Position expected,List<Move> history,int millis,Consumer<Analysis> progress)throws Exception{
+        Position replay=initial;StringBuilder command=new StringBuilder(initial.fen().equals(Position.START)?"position startpos":"position fen "+initial.fen());
         if(!history.isEmpty())command.append(" moves");
         for(Move move:history){replay=replay.play(move);command.append(' ').append(move.uci());}
         if(!replay.fen().equals(expected.fen()))throw new IllegalArgumentException("История не соответствует позиции");

@@ -30,7 +30,7 @@ public final class CoreTest {
         char[] noise=pair.pieces();noise[0]='.';check(tracker.accept(noise).status()==GameTracker.Status.UNRECOGNIZED,"reject impossible transition");check(tracker.position().fen().equals(pair.fen()),"unrecognized frame does not mutate state");
         AtomicReference<Analysis> result=new AtomicReference<>();new LocalEngine().analyze(Position.fromFen("6k1/5ppp/8/8/8/8/5PPP/3Q2K1 w - - 0 1"),400,result::set);
         check(result.get()!=null&&result.get().bestMove()!=null,"fallback returns move");check(Position.fromFen("6k1/5ppp/8/8/8/8/5PPP/3Q2K1 w - - 0 1").legalMoves().contains(result.get().bestMove()),"engine move legal");
-        for(String invalid:new String[]{"8/8/8/8/8/8/8/4K2k w K - 0 1","8/8/8/8/8/8/8/4Kk2 w - - 0 1","P6k/8/8/8/8/8/8/7K w - - 0 1"}){boolean rejected=false;try{Position.fromFen(invalid);}catch(IllegalArgumentException e){rejected=true;}check(rejected,"reject impossible FEN");}
+        for(String invalid:new String[]{"8/8/8/8/8/8/8/4K2k w K - 0 1","8/8/8/8/8/8/8/4Kk2 w - - 0 1","P6k/8/8/8/8/8/8/7K w - - 0 1","7k/8/8/8/8/8/8/7K w - - 32768 1","7k/8/8/8/8/8/8/7K w - - 0 50001"}){boolean rejected=false;try{Position.fromFen(invalid);}catch(IllegalArgumentException e){rejected=true;}check(rejected,"reject impossible FEN");}
         visionTests();
         locatorTests();
         autoSearchTests();
@@ -92,6 +92,12 @@ public final class CoreTest {
         byte[] broken=bytes.clone();broken[broken.length/2]^=0x42;boolean rejected=false;
         try{GameMemory.decode(broken);}catch(java.io.IOException e){rejected=true;}check(rejected,"corrupt session snapshot rejected");
         boolean illegal=false;try{GameTracker.replay(List.of(Move.parse("e2e5")));}catch(IllegalArgumentException e){illegal=true;}check(illegal,"restoration rejects illegal move history");
+        Position baseline=Position.fromDiagram(pair.pieces(),true,15,-1,0,17);GameTracker rebased=new GameTracker(baseline);rebased.accept(baseline.play(Move.parse("g1f3")).pieces());
+        GameMemory.Restored midgame=GameMemory.decode(GameMemory.encode(rebased,vision));
+        check(midgame.game().initial().fen().equals(baseline.fen())&&midgame.game().history().size()==1&&midgame.game().position().fullmove==17,"manual recovery stores its own baseline and subsequent history without pretending to start at move one");
+        byte[] modern=GameMemory.encode(game,vision);java.io.DataInputStream oldInput=new java.io.DataInputStream(new java.util.zip.GZIPInputStream(new java.io.ByteArrayInputStream(modern)));oldInput.readInt();oldInput.readUTF();byte[] payload=oldInput.readAllBytes();oldInput.close();
+        java.io.ByteArrayOutputStream legacyBytes=new java.io.ByteArrayOutputStream();try(java.io.DataOutputStream output=new java.io.DataOutputStream(new java.util.zip.GZIPOutputStream(legacyBytes))){output.writeInt(0x484f4404);output.write(payload);}
+        GameMemory.Restored legacy=GameMemory.decode(legacyBytes.toByteArray());check(legacy.game().position().fen().equals(game.position().fen())&&legacy.game().history().equals(game.history()),"0.4 and 0.5 saved games migrate without losing legal history");
         int[] full=screenWith(pair,1000,1500,220,350,640,false),crop=new int[640*640];
         for(int row=0;row<640;row++)System.arraycopy(full,(350+row)*1000+220,crop,row*640,640);
         check(vision.recognize(crop,640,640,new BoardVision.Region(0,0,640)).uncertain()==0&&Arrays.equals(vision.recognize(crop,640,640,new BoardVision.Region(0,0,640)).board(),pair.pieces()),"board-only capture preserves recognition at nonzero screen coordinates");
@@ -165,6 +171,10 @@ public final class CoreTest {
             result.set(null);engine.analyze(play(Position.start(),"e2e4"),120,result::set);check(result.get().centipawns()==-35,"UCI score normalized for Black");
             result.set(null);engine.analyzeGame(play(Position.start(),"e2e4"),List.of(Move.parse("e2e4")),120,result::set);check(result.get().bestMove().uci().equals("e7e5"),"full game history reaches the UCI process");
             boolean mismatch=false;try{engine.analyzeGame(Position.start(),List.of(Move.parse("e2e4")),120,result::set);}catch(IllegalArgumentException e){mismatch=true;}check(mismatch,"history/position mismatch never sent to native engine");
+            Position base=Position.fromFen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 17");result.set(null);
+            engine.analyzeGame(base,base.play(Move.parse("e2e4")),List.of(Move.parse("e2e4")),120,result::set);
+            check(result.get().bestMove().uci().equals("e7e5"),"confirmed midgame base FEN and its subsequent moves reach the native process");
+            boolean wrongBase=false;try{engine.analyzeGame(Position.start(),base.play(Move.parse("e2e4")),List.of(Move.parse("e2e4")),120,result::set);}catch(IllegalArgumentException e){wrongBase=true;}check(wrongBase,"wrong starting FEN is rejected even when pieces and move sequence match");
             engine.configure(4,3);result.set(null);engine.analyze(Position.start(),120,result::set);check(result.get().bestMove().uci().equals("d2d4"),"authoritative bestmove overrides the last intermediate top PV");check(result.get().centipawns()==10,"final move keeps its own evaluation");engine.configure(2,1);
             ExecutorService executor=Executors.newSingleThreadExecutor();CountDownLatch started=new CountDownLatch(1);
             try{

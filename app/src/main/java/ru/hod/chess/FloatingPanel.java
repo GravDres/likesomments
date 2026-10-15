@@ -8,7 +8,7 @@ import android.widget.*;
 import ru.hod.chess.core.*;
 
 final class FloatingPanel {
-    interface Actions {void calibrate();void manual();void recover();void side(PlayerSide side);void newGame();void pause(boolean value);void arrows(boolean value);void deeper();void stop();}
+    interface Actions {void calibrate();void manual();void recover();void verify();void review();void side(PlayerSide side);void newGame();void pause(boolean value);void arrows(boolean value);void deeper();void stop();}
     private final Context c;private final WindowManager wm;private final WindowManager.LayoutParams lp;
     private final LinearLayout root;private final ScrollView bodyScroll;
     private final TextView status,score,move,details,variants,compactSummary,health;
@@ -16,7 +16,7 @@ final class FloatingPanel {
     private final SharedPreferences prefs;
     private boolean arrowsEnabled,locked,compact=true,paused,closed,dragging;
     private PlayerSide side;private float startX,startY;private int startLeft,startTop;
-    private volatile Rect bounds=new Rect();private BoardVision.Region board;
+    private volatile Rect bounds=new Rect();private BoardVision.Region board;private String lastMessage;
     FloatingPanel(Context c,Actions actions){
         this.c=c;prefs=c.getSharedPreferences("hod",Context.MODE_PRIVATE);wm=c.getSystemService(WindowManager.class);
         side=prefs.getBoolean("playerWhite",true)?PlayerSide.WHITE:PlayerSide.BLACK;locked=prefs.getBoolean("panelLocked",true);
@@ -24,10 +24,12 @@ final class FloatingPanel {
         LinearLayout title=Ui.row(c);TextView logo=Ui.bold(c,"♞  ХОД",17,Ui.ACCENT);title.addView(logo,new LinearLayout.LayoutParams(0,Ui.dp(c,38),1));
         collapse=small("+",()->setCompact(!compact));title.addView(collapse);title.addView(small("↻",actions::recover));root.addView(title);
         compactSummary=Ui.bold(c,"Ищу начальную доску…",13,Ui.INK);compactSummary.setLines(2);compactSummary.setEllipsize(TextUtils.TruncateAt.END);compactSummary.setGravity(Gravity.CENTER_VERTICAL);root.addView(compactSummary,new LinearLayout.LayoutParams(-1,Ui.dp(c,48)));
+        LinearLayout quick=Ui.row(c);quick.addView(small("Проверить",actions::verify),new LinearLayout.LayoutParams(0,Ui.dp(c,34),1));quick.addView(small("Позиция",actions::review),new LinearLayout.LayoutParams(0,Ui.dp(c,34),1));root.addView(quick);
+        compactSummary.setOnClickListener(v->{if(lastMessage!=null){android.app.AlertDialog dialog=new android.app.AlertDialog.Builder(c).setTitle("Состояние помощника").setMessage(lastMessage).setPositiveButton("Понятно",null).create();dialog.getWindow().setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY);dialog.show();}});
         bodyScroll=new ScrollView(c);bodyScroll.setFillViewport(false);bodyScroll.setVisibility(View.GONE);root.addView(bodyScroll,new LinearLayout.LayoutParams(-1,0,1));
         LinearLayout body=Ui.col(c);bodyScroll.addView(body);
         sideButton=small(sideText(),()->{side=side.opposite();sideButtonText();actions.side(side);});body.addView(sideButton,new LinearLayout.LayoutParams(-1,Ui.dp(c,40)));Ui.gap(body,6);
-        status=Ui.text(c,"Ищу начальную доску…",12,Ui.MUTED);status.setMaxLines(3);body.addView(status);Ui.gap(body,6);
+        status=Ui.text(c,"Ищу начальную доску…",12,Ui.MUTED);status.setMaxLines(8);body.addView(status);Ui.gap(body,6);
         score=Ui.bold(c,"—",28,Ui.INK);body.addView(score,new LinearLayout.LayoutParams(-1,Ui.dp(c,38)));
         move=Ui.bold(c,"Жду точную позицию",15,Ui.INK);move.setMaxLines(2);body.addView(move,new LinearLayout.LayoutParams(-1,Ui.dp(c,44)));
         details=Ui.text(c,"",11,Ui.MUTED);details.setMaxLines(3);body.addView(details,new LinearLayout.LayoutParams(-1,Ui.dp(c,48)));
@@ -40,7 +42,7 @@ final class FloatingPanel {
         body.addView(small("Новая партия",actions::newGame),new LinearLayout.LayoutParams(-1,Ui.dp(c,38)));Ui.gap(body,6);
         body.addView(small("Остановить помощника",actions::stop),new LinearLayout.LayoutParams(-1,Ui.dp(c,38)));
         health=Ui.text(c,"Захват: подключаю…",10,Ui.MUTED);health.setSingleLine(true);health.setEllipsize(TextUtils.TruncateAt.END);root.addView(health,new LinearLayout.LayoutParams(-1,Ui.dp(c,20)));
-        lp=new WindowManager.LayoutParams(Ui.dp(c,230),Ui.dp(c,126),WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE|WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL|WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,PixelFormat.TRANSLUCENT);
+        lp=new WindowManager.LayoutParams(Ui.dp(c,230),Ui.dp(c,160),WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE|WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL|WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,PixelFormat.TRANSLUCENT);
         lp.gravity=Gravity.TOP|Gravity.LEFT;lp.x=prefs.getInt("panelX",Ui.dp(c,12));lp.y=prefs.getInt("panelY",Ui.dp(c,56));clamp();wm.addView(root,lp);
         root.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->updateBounds());title.setOnTouchListener(this::drag);logo.setOnTouchListener(this::drag);
     }
@@ -71,8 +73,8 @@ final class FloatingPanel {
     boolean overlaps(BoardVision.Region r){Rect b=bounds;return b.left<r.left()+r.size()&&b.right>r.left()&&b.top<r.top()+r.size()&&b.bottom>r.top();}
     void setCompact(boolean value){
         if(closed)return;compact=value;bodyScroll.setVisibility(value?View.GONE:View.VISIBLE);compactSummary.setVisibility(value?View.VISIBLE:View.GONE);collapse.setText(value?"+":"−");
-        android.util.DisplayMetrics m=metrics();lp.width=Ui.dp(c,value?230:258);lp.height=Ui.dp(c,126);
-        if(!value){int space=m.heightPixels-Ui.dp(c,80);if(board!=null)space=Math.max(board.top()-Ui.dp(c,44),m.heightPixels-board.top()-board.size()-Ui.dp(c,44));lp.height=Math.min(Ui.dp(c,520),Math.max(Ui.dp(c,190),space));}
+        android.util.DisplayMetrics m=metrics();lp.width=Ui.dp(c,value?230:258);lp.height=Ui.dp(c,160);
+        if(!value){int space=m.heightPixels-Ui.dp(c,80);if(board!=null)space=Math.max(board.top()-Ui.dp(c,44),m.heightPixels-board.top()-board.size()-Ui.dp(c,44));lp.height=Math.min(Ui.dp(c,520),Math.max(Ui.dp(c,230),space));}
         clamp();if(board!=null&&rectOverlaps(board))positionOutside(board,m.widthPixels,m.heightPixels);wm.updateViewLayout(root,lp);root.post(this::updateBounds);
     }
     private boolean rectOverlaps(BoardVision.Region r){return lp.x<r.left()+r.size()&&lp.x+lp.width>r.left()&&lp.y<r.top()+r.size()&&lp.y+lp.height>r.top();}
@@ -87,11 +89,11 @@ final class FloatingPanel {
     void placeOutside(BoardVision.Region r,int width,int height){
         if(closed)return;board=r;setCompact(true);if(rectOverlaps(r)){positionOutside(r,width,height);wm.updateViewLayout(root,lp);}rememberPosition();root.post(this::updateBounds);
     }
-    void message(String text){if(closed)return;compactSummary.setText(text);status.setText(text);status.setTextColor(Ui.MUTED);score.setText("—");move.setText("Жду точную позицию");details.setText("Ты играешь "+side.label()+" · история сохраняется");variants.setText("");}
-    void waiting(PlayerSide player,int plies){if(closed)return;compactSummary.setText("Ты играешь "+player.label()+"\nХод соперника · жду");status.setText("●  Ход соперника");status.setTextColor(Ui.MUTED);score.setText("—");move.setText("Жду ход соперника");details.setText("История: "+plies+" полуходов · подсказки только тебе");variants.setText("");}
-    void thinking(Position p){if(closed)return;compactSummary.setText("Твой ход · считаю…\nТы играешь "+side.label());status.setText("●  Позиция подтверждена");status.setTextColor(Ui.ACCENT);score.setText("…");move.setText("Stockfish 19 · считаю…");details.setText("Локальный расчёт без ограничения силы");variants.setText("");}
+    void message(String text){if(closed||text.equals(lastMessage))return;lastMessage=text;compactSummary.setText(text.length()>92?"Нужна проверка позиции\nНажми текст, чтобы прочитать причину":text);status.setText(text);status.setTextColor(Ui.MUTED);score.setText("—");move.setText("Жду точную позицию");details.setText("Ты играешь "+side.label()+" · история сохраняется");variants.setText("");}
+    void waiting(PlayerSide player,int plies){if(closed)return;lastMessage=null;compactSummary.setText("Ты играешь "+player.label()+"\nХод соперника · жду");status.setText("●  Ход соперника");status.setTextColor(Ui.MUTED);score.setText("—");move.setText("Жду ход соперника");details.setText("История: "+plies+" полуходов · подсказки только тебе");variants.setText("");}
+    void thinking(Position p){if(closed)return;lastMessage=null;compactSummary.setText("Твой ход · считаю…\nТы играешь "+side.label());status.setText("●  Позиция подтверждена");status.setTextColor(Ui.ACCENT);score.setText("…");move.setText("Stockfish 19 · считаю…");details.setText("Локальный расчёт без ограничения силы");variants.setText("");}
     void show(Position p,Analysis a,float confidence,boolean complete,int plies){
-        if(closed||!side.ownsTurn(p))return;
+        if(closed||!side.ownsTurn(p))return;lastMessage=null;
         status.setText("●  "+(complete?"Готово":"Считаю")+" · совпадение "+Math.round(confidence*100)+"%");status.setTextColor(Ui.ACCENT);score.setText(a.score());Move best=a.bestMove();
         compactSummary.setText(best==null?"Партия завершена":Position.square(best.from())+" → "+Position.square(best.to())+(best.promotion()!='\0'?"="+best.promotion():"")+"   ·   "+a.score()+"\n"+(complete?"Готово":"Считаю…")+" · глубина "+a.depth());
         move.setText(best==null?"Нет легальных ходов":p.describe(best));details.setText(a.engine()+" · глубина "+a.depth()+"\nИстория: "+plies+" полуходов · оценка за белых");

@@ -6,15 +6,19 @@ import java.util.*;
 public final class GameTracker {
     public enum Status { SAME, MOVED, UNRECOGNIZED, AMBIGUOUS, RECOVERY_LIMIT }
     public record Update(Status status, Position position, List<Move> moves) {}
-    private Position current;
+    private Position current;private final Position initial;
     private final List<Move> history=new ArrayList<>();
     private final Map<String,Integer> repetitions=new HashMap<>();
-    public GameTracker(Position initial){current=initial;repetitions.put(initial.repetitionKey(),1);}
+    public GameTracker(Position initial){this.initial=initial;current=initial;repetitions.put(initial.repetitionKey(),1);}
     public static GameTracker replay(List<Move> moves){
-        GameTracker game=new GameTracker(Position.start());
+        return replay(Position.start(),moves);
+    }
+    public static GameTracker replay(Position initial,List<Move> moves){
+        GameTracker game=new GameTracker(initial);
         for(Move move:moves){game.current=game.current.play(move);game.history.add(move);game.repetitions.merge(game.current.repetitionKey(),1,Integer::sum);}
         return game;
     }
+    public Position initial(){return initial;}
     public synchronized Position position(){return current;}
     public synchronized List<Move> history(){return List.copyOf(history);}
     public synchronized Update accept(char[] board) {

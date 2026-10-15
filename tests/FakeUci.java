@@ -19,7 +19,7 @@ public final class FakeUci {
             else if(command.equals("setoption name Hash value 256"))hashReady=true;
             else if(command.equals("setoption name Skill Level value 20"))fullSkill=true;
             else if(command.equals("setoption name UCI_LimitStrength value false"))unlimited=true;
-            else if(command.startsWith("position fen "))black=command.contains(" b ");
+            else if(command.startsWith("position fen ")){black=command.contains(" b ");if(command.contains(" moves ")&&command.substring(command.indexOf(" moves ")+7).trim().split(" ").length%2==1)black=!black;}
             else if(command.startsWith("position startpos"))black=command.contains(" moves ")&&command.substring(command.indexOf(" moves ")+7).trim().split(" ").length%2==1;
             else if(command.startsWith("setoption name MultiPV value "))multiple=command.endsWith("3");
             else if(command.startsWith("go ")){

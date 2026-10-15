@@ -7,7 +7,9 @@ import java.io.*;
 public final class BoardVision {
     private static final int N=24;
     public record Region(int left,int top,int size) { public boolean inside(int w,int h){return size>=160&&left>=0&&top>=0&&left+size<=w&&top+size<=h;} }
-    public record Feature(float[] mask,float ink,float occupancy) {}
+    public record Feature(float[] mask,float ink,float occupancy,float[] silhouette) {
+        public Feature(float[] mask,float ink,float occupancy){this(mask,ink,occupancy,canonical(mask));}
+    }
     public record Observation(char[] board,float confidence,int uncertain) {}
     private record Template(char piece,Feature feature) {}
     private final List<Template> templates=new ArrayList<>();
@@ -22,7 +24,7 @@ public final class BoardVision {
     }
     static BoardVision readFrom(DataInput in)throws IOException{
         BoardVision model=new BoardVision(in.readBoolean());int count=in.readInt();
-        if(count!=32)throw new IOException("Некорректные шаблоны фигур");
+        if(count<12||count>96)throw new IOException("Некорректные шаблоны фигур");
         Set<Character> kinds=new HashSet<>();
         for(int i=0;i<count;i++){
             char piece=in.readChar();if("pnbrqkPNBRQK".indexOf(piece)<0)throw new IOException("Некорректный шаблон");kinds.add(piece);
@@ -32,6 +34,24 @@ public final class BoardVision {
         if(kinds.size()!=12)throw new IOException("Нет всех типов фигур");return model;
     }
     private static float unit(float value)throws IOException{if(!Float.isFinite(value)||value<0||value>1)throw new IOException("Повреждённый шаблон");return value;}
+    /** Only use labels explicitly confirmed by the user or by a legal stable observation. */
+    public BoardVision learnConfirmed(int[] pixels,int w,int h,Region region,Position confirmed){
+        if(!region.inside(w,h))throw new IllegalArgumentException("Доска вне экрана");
+        BoardVision model=withOrientation(whiteBottom);Set<Character> labels=new HashSet<>();
+        for(Template t:model.templates)labels.add(t.piece());
+        for(int display=0;display<64;display++){
+            char piece=confirmed.at(whiteBottom?display:63-display);if(piece=='.')continue;
+            Feature feature=extract(pixels,w,region,display);
+            if(feature.occupancy()<.045f||feature.occupancy()>.88f)throw new IllegalArgumentException("Проверь фигуру на "+Position.square(whiteBottom?display:63-display));
+            model.templates.add(new Template(piece,feature));labels.add(piece);
+        }
+        if(labels.size()!=12)throw new IllegalArgumentException("Не хватает шаблонов всех фигур: сначала обучи тему на начальной доске");
+        while(model.templates.size()>96){
+            Map<Character,Integer> counts=new HashMap<>();for(Template t:model.templates)counts.merge(t.piece(),1,Integer::sum);
+            for(int i=0;i<model.templates.size();i++)if(counts.get(model.templates.get(i).piece())>1){model.templates.remove(i);break;}
+        }
+        return model;
+    }
     public void calibrate(int[] pixels,int w,int h,Region region) {
         if(!region.inside(w,h))throw new IllegalArgumentException("Область доски вне экрана");
         List<Template> pending=new ArrayList<>();Position start=Position.start();Set<Character> labels=new HashSet<>();
@@ -70,5 +90,16 @@ public final class BoardVision {
             float dist=(r-br)*(r-br)+(g-bg)*(g-bg)+(b-bb)*(b-bb);float m=Math.max(0f,Math.min(1f,(dist-900f)/2200f));mask[y*N+x]=m;occupied+=m;ink+=m*(.2126f*r+.7152f*g+.0722f*b)/255f;
         }return new Feature(mask,occupied>0?ink/occupied:0,occupied/(N*N));
     }
-    private static float distance(Feature a,Feature b){float sum=0;for(int i=0;i<N*N;i++)sum+=Math.abs(a.mask()[i]-b.mask()[i]);return sum/(N*N)+Math.abs(a.ink()-b.ink())*.22f;}
+    private static float[] canonical(float[] mask){
+        boolean[] expanded=new boolean[N*N],outside=new boolean[N*N];int[] queue=new int[N*N];int head=0,tail=0;
+        for(int y=0;y<N;y++)for(int x=0;x<N;x++){
+            for(int dy=-1;dy<=1;dy++)for(int dx=-1;dx<=1;dx++){int xx=x+dx,yy=y+dy;if(xx>=0&&xx<N&&yy>=0&&yy<N&&mask[yy*N+xx]>.12f)expanded[y*N+x]=true;}
+        }
+        for(int y=0;y<N;y++)for(int x=0;x<N;x++)if((x==0||y==0||x==N-1||y==N-1)&&!expanded[y*N+x]){outside[y*N+x]=true;queue[tail++]=y*N+x;}
+        while(head<tail){int index=queue[head++],x=index%N,y=index/N;for(int direction=0;direction<4;direction++){int xx=x+(direction==0?-1:direction==1?1:0),yy=y+(direction==2?-1:direction==3?1:0);if(xx<0||xx>=N||yy<0||yy>=N)continue;int next=yy*N+xx;if(!expanded[next]&&!outside[next]){outside[next]=true;queue[tail++]=next;}}}
+        float[] result=new float[N*N];
+        for(int y=1;y<N-1;y++)for(int x=1;x<N-1;x++){boolean filled=true;for(int dy=-1;dy<=1;dy++)for(int dx=-1;dx<=1;dx++)if(outside[(y+dy)*N+x+dx])filled=false;if(filled)result[y*N+x]=1;}
+        return result;
+    }
+    private static float distance(Feature a,Feature b){float raw=0,shape=0,filled=0;for(int i=0;i<N*N;i++){raw+=Math.abs(a.mask()[i]-b.mask()[i]);shape+=Math.abs(Math.min(1,a.mask()[i]*4)-Math.min(1,b.mask()[i]*4));filled+=Math.abs(a.silhouette()[i]-b.silhouette()[i]);}return Math.min(raw,Math.min(shape,filled))/(N*N)+Math.abs(a.ink()-b.ink())*.22f;}
 }

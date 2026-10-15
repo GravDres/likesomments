@@ -10,6 +10,10 @@ public final class Position {
     public final int rights, ep, halfmove, fullmove;
     private Position(char[] b, boolean w, int r, int e, int h, int f) { board=b; white=w; rights=r; ep=e; halfmove=h; fullmove=f; }
     public static Position start() { return fromFen(START); }
+    public static Position fromDiagram(char[] pieces,boolean white,int rights,int ep,int halfmove,int fullmove){
+        if(pieces.length!=64||rights<0||rights>15||ep< -1||ep>63)throw new IllegalArgumentException("Некорректная позиция");
+        return fromFen(new Position(pieces.clone(),white,rights,ep,halfmove,fullmove).fen());
+    }
     public char at(int i) { return board[i]; }
     public char[] pieces() { return board.clone(); }
     public static int index(String s) {
@@ -31,7 +35,7 @@ public final class Position {
         int rights=0; for(int i=0;i<4;i++) if(f[2].indexOf("KQkq".charAt(i))>=0)rights|=1<<i;
         int e=f[3].equals("-")?-1:index(f[3]);
         if(e>=0 && ((f[1].equals("w")&&e/8!=2)|| (f[1].equals("b")&&e/8!=5))) throw new IllegalArgumentException("Некорректное поле en passant");
-        int h=Integer.parseInt(f[4]), n=Integer.parseInt(f[5]); if(h<0||n<1)throw new IllegalArgumentException("Некорректные счётчики");
+        int h=Integer.parseInt(f[4]), n=Integer.parseInt(f[5]); if(h<0||h>32767||n<1||n>50000)throw new IllegalArgumentException("Некорректные счётчики");
         Position position=new Position(b,f[1].equals("w"),rights,e,h,n);
         int whitePieces=0,blackPieces=0,whitePawns=0,blackPawns=0;
         for(int i=0;i<64;i++){char piece=b[i];if(piece=='.')continue;if(isWhite(piece))whitePieces++;else blackPieces++;
