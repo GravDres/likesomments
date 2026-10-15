@@ -8,10 +8,10 @@ import android.widget.*;
 import ru.hod.chess.core.*;
 
 final class FloatingPanel {
-    interface Actions {void calibrate();void manual();void side(PlayerSide side);void newGame();void pause(boolean value);void arrows(boolean value);void deeper();void stop();}
+    interface Actions {void calibrate();void manual();void recover();void side(PlayerSide side);void newGame();void pause(boolean value);void arrows(boolean value);void deeper();void stop();}
     private final Context c;private final WindowManager wm;private final WindowManager.LayoutParams lp;
     private final LinearLayout root;private final ScrollView bodyScroll;
-    private final TextView status,score,move,details,variants,compactSummary;
+    private final TextView status,score,move,details,variants,compactSummary,health;
     private final Button collapse,pause,arrowToggle,sideButton,lockButton;
     private final SharedPreferences prefs;
     private boolean arrowsEnabled,locked,compact=true,paused,closed,dragging;
@@ -22,7 +22,7 @@ final class FloatingPanel {
         side=prefs.getBoolean("playerWhite",true)?PlayerSide.WHITE:PlayerSide.BLACK;locked=prefs.getBoolean("panelLocked",true);
         root=Ui.col(c);Ui.pad(root,10);root.setBackground(Ui.shape(Ui.CARD,Ui.dp(c,20)));root.setElevation(Ui.dp(c,12));
         LinearLayout title=Ui.row(c);TextView logo=Ui.bold(c,"♞  ХОД",17,Ui.ACCENT);title.addView(logo,new LinearLayout.LayoutParams(0,Ui.dp(c,38),1));
-        collapse=small("+",()->setCompact(!compact));title.addView(collapse);title.addView(small("×",actions::stop));root.addView(title);
+        collapse=small("+",()->setCompact(!compact));title.addView(collapse);title.addView(small("↻",actions::recover));root.addView(title);
         compactSummary=Ui.bold(c,"Ищу начальную доску…",13,Ui.INK);compactSummary.setLines(2);compactSummary.setEllipsize(TextUtils.TruncateAt.END);compactSummary.setGravity(Gravity.CENTER_VERTICAL);root.addView(compactSummary,new LinearLayout.LayoutParams(-1,Ui.dp(c,48)));
         bodyScroll=new ScrollView(c);bodyScroll.setFillViewport(false);bodyScroll.setVisibility(View.GONE);root.addView(bodyScroll,new LinearLayout.LayoutParams(-1,0,1));
         LinearLayout body=Ui.col(c);bodyScroll.addView(body);
@@ -37,8 +37,10 @@ final class FloatingPanel {
         arrowsEnabled=prefs.getBoolean("arrows",true);arrowToggle=small(arrowText(),()->{arrowsEnabled=!arrowsEnabled;arrowToggleText();actions.arrows(arrowsEnabled);});body.addView(arrowToggle,new LinearLayout.LayoutParams(-1,Ui.dp(c,38)));Ui.gap(body,6);
         lockButton=small(lockText(),()->{locked=!locked;prefs.edit().putBoolean("panelLocked",locked).apply();lockButtonText();});body.addView(lockButton,new LinearLayout.LayoutParams(-1,Ui.dp(c,38)));Ui.gap(body,6);
         body.addView(small("Глубже · 8 секунд",actions::deeper),new LinearLayout.LayoutParams(-1,Ui.dp(c,38)));Ui.gap(body,6);
-        body.addView(small("Новая партия",actions::newGame),new LinearLayout.LayoutParams(-1,Ui.dp(c,38)));
-        lp=new WindowManager.LayoutParams(Ui.dp(c,230),Ui.dp(c,106),WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE|WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL|WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,PixelFormat.TRANSLUCENT);
+        body.addView(small("Новая партия",actions::newGame),new LinearLayout.LayoutParams(-1,Ui.dp(c,38)));Ui.gap(body,6);
+        body.addView(small("Остановить помощника",actions::stop),new LinearLayout.LayoutParams(-1,Ui.dp(c,38)));
+        health=Ui.text(c,"Захват: подключаю…",10,Ui.MUTED);health.setSingleLine(true);health.setEllipsize(TextUtils.TruncateAt.END);root.addView(health,new LinearLayout.LayoutParams(-1,Ui.dp(c,20)));
+        lp=new WindowManager.LayoutParams(Ui.dp(c,230),Ui.dp(c,126),WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE|WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL|WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,PixelFormat.TRANSLUCENT);
         lp.gravity=Gravity.TOP|Gravity.LEFT;lp.x=prefs.getInt("panelX",Ui.dp(c,12));lp.y=prefs.getInt("panelY",Ui.dp(c,56));clamp();wm.addView(root,lp);
         root.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->updateBounds());title.setOnTouchListener(this::drag);logo.setOnTouchListener(this::drag);
     }
@@ -69,7 +71,7 @@ final class FloatingPanel {
     boolean overlaps(BoardVision.Region r){Rect b=bounds;return b.left<r.left()+r.size()&&b.right>r.left()&&b.top<r.top()+r.size()&&b.bottom>r.top();}
     void setCompact(boolean value){
         if(closed)return;compact=value;bodyScroll.setVisibility(value?View.GONE:View.VISIBLE);compactSummary.setVisibility(value?View.VISIBLE:View.GONE);collapse.setText(value?"+":"−");
-        android.util.DisplayMetrics m=metrics();lp.width=Ui.dp(c,value?230:258);lp.height=Ui.dp(c,106);
+        android.util.DisplayMetrics m=metrics();lp.width=Ui.dp(c,value?230:258);lp.height=Ui.dp(c,126);
         if(!value){int space=m.heightPixels-Ui.dp(c,80);if(board!=null)space=Math.max(board.top()-Ui.dp(c,44),m.heightPixels-board.top()-board.size()-Ui.dp(c,44));lp.height=Math.min(Ui.dp(c,520),Math.max(Ui.dp(c,190),space));}
         clamp();if(board!=null&&rectOverlaps(board))positionOutside(board,m.widthPixels,m.heightPixels);wm.updateViewLayout(root,lp);root.post(this::updateBounds);
     }
@@ -97,6 +99,9 @@ final class FloatingPanel {
     }
     void terminal(Position p){if(closed)return;compactSummary.setText(p.inCheck(p.white)?"Мат · партия завершена":"Пат · ничья");status.setText("Партия завершена");score.setText(p.inCheck(p.white)?"МАТ":"½–½");move.setText(p.inCheck(p.white)?(p.white?"Чёрные выиграли":"Белые выиграли"):"Пат");details.setText("Для следующей игры нажми «Новая партия»");variants.setText("");}
     void draw(String reason){if(closed)return;compactSummary.setText("Ничья · "+reason);status.setText("Партия завершена");score.setText("½–½");move.setText("Ничья");details.setText(reason);variants.setText("");}
-    void hide(boolean hidden){if(!closed)root.setVisibility(hidden?View.INVISIBLE:View.VISIBLE);}
+    void health(String text){if(!closed&&!text.contentEquals(health.getText()))health.setText(text);}
+    void ensureAttached(){if(closed)return;if(!root.isAttachedToWindow()){clamp();try{wm.addView(root,lp);}catch(IllegalStateException|IllegalArgumentException e){try{wm.removeViewImmediate(root);}catch(IllegalArgumentException ignored){}wm.addView(root,lp);}root.post(this::updateBounds);}root.setVisibility(View.VISIBLE);}
+    void prepareSearch(){setCompact(true);if(board==null){lp.x=Ui.dp(c,8);lp.y=Ui.dp(c,32);clamp();wm.updateViewLayout(root,lp);root.post(this::updateBounds);}message("Ищу доску · окно остаётся на экране");}
+    void setPaused(boolean value){paused=value;pauseText();}
     void close(){if(closed)return;closed=true;try{wm.removeView(root);}catch(IllegalArgumentException ignored){}}
 }

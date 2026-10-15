@@ -14,6 +14,7 @@ public final class BoardVision {
     private final boolean whiteBottom;
     public BoardVision(boolean whiteBottom){this.whiteBottom=whiteBottom;}
     public BoardVision withOrientation(boolean whiteBottom){BoardVision copy=new BoardVision(whiteBottom);copy.templates.addAll(templates);return copy;}
+    public boolean whiteBottom(){return whiteBottom;}
     public int templateCount(){return templates.size();}
     void writeTo(DataOutput out)throws IOException{
         out.writeBoolean(whiteBottom);out.writeInt(templates.size());

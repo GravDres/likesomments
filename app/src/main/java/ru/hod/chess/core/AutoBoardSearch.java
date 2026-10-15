@@ -4,7 +4,7 @@ import java.util.*;
 
 /** A two-frame calibration protocol. It never mutates the live game while probing. */
 public final class AutoBoardSearch {
-    public enum State { SEARCHING, UNCERTAIN_GRID, NEED_INITIAL, NEED_NEW_GAME, NEED_ORIENTATION, VERIFYING, READY }
+    public enum State { SEARCHING, UNCERTAIN_GRID, NEED_INITIAL, NEED_HISTORY, NEED_NEW_GAME, NEED_ORIENTATION, VERIFYING, READY }
     public record Calibration(BoardVision.Region region, BoardVision vision,
                               boolean whiteBottom, boolean reuseGame) {}
     public record Result(State state, BoardLocator.Detection detection,
@@ -36,12 +36,12 @@ public final class AutoBoardSearch {
         // repetition history or en passant, as long as its piece templates still fit.
         if (previous != null && game != null) {
             List<Pending> matches = new ArrayList<>();
-            for (boolean whiteBottom : new boolean[]{true, false}) {
+            for (boolean whiteBottom : new boolean[]{previous.whiteBottom(), !previous.whiteBottom()}) {
                 BoardVision model = previous.withOrientation(whiteBottom);
                 BoardVision.Observation seen = model.recognize(pixels, width, height, d.region());
                 if (seen.uncertain() != 0) continue;
                 GameTracker trial = new GameTracker(game.position());
-                GameTracker.Status status = trial.accept(seen.board()).status();
+                GameTracker.Status status = trial.recover(seen.board()).status();
                 if (status == GameTracker.Status.SAME || status == GameTracker.Status.MOVED) {
                     matches.add(new Pending(new Calibration(d.region(), model, whiteBottom, true), seen.board()));
                 }
@@ -55,6 +55,7 @@ public final class AutoBoardSearch {
             }
         }
         if (!d.initialLayout()) {
+            if(game!=null&&!game.history().isEmpty())return result(State.NEED_HISTORY,d,null,"Доска найдена · восстанавливаю продолжение сохранённой партии");
             return result(State.NEED_INITIAL, d, null, "Доска найдена · для первого обучения нужна начальная расстановка");
         }
         if(game!=null&&!game.history().isEmpty()){

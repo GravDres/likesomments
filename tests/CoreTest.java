@@ -35,9 +35,34 @@ public final class CoreTest {
         locatorTests();
         autoSearchTests();
         sessionTests();
+        recoveryAndGateTests();
         arrowTests();
         uciTests();
         System.out.println("PASS: "+count+" assertions, including 197281 + 97862 perft leaf positions");
+    }
+    static void recoveryAndGateTests()throws Exception{
+        CleanFrameGate gate=new CleanFrameGate();
+        check(gate.accept(1),"new capture admits clean frames without an Image timestamp assumption");
+        long version=gate.version();gate.block();check(!gate.accept(Long.MAX_VALUE)&&gate.version()!=version,"visible overlay blocks recognition regardless of time");
+        gate.hidden(1_000_000_000L);check(!gate.accept(1_050_000_000L),"compositor settling interval enforced");
+        check(!gate.accept(1_080_000_000L)&&!gate.accept(1_100_000_000L),"queued images discarded after hiding an arrow");
+        check(gate.accept(1_120_000_000L)&&gate.accept(1_200_000_000L),"frame gate reopens and stays open after the boundary");
+        gate.block();gate.reset();check(gate.accept(2),"replacement capture resets a blocked frame gate");
+        GameTracker three=new GameTracker(Position.start());Position target=play(Position.start(),"e2e4","d7d5","e4e5");
+        GameTracker.Update recovered=three.recover(target.pieces());
+        check(recovered.status()==GameTracker.Status.MOVED&&three.history().size()==3,"recover a unique missed three-ply sequence");
+        check(three.position().fen().equals(target.fen()),"three-ply recovery preserves turn and complete FEN metadata");
+        GameTracker four=new GameTracker(Position.start());Position captured=play(Position.start(),"e2e4","d7d5","e4d5","d8d5");
+        check(four.recover(captured.pieces()).status()==GameTracker.Status.MOVED&&four.history().size()==4,"recover a forced chain of four missed capture plies");
+        check(four.position().fen().equals(captured.fen()),"four-ply recovery retains castling rights and move counters");
+        GameTracker ambiguous=new GameTracker(Position.start());Position multiple=play(Position.start(),"e2e4","e7e5","g1f3");
+        check(ambiguous.recover(multiple.pieces()).status()==GameTracker.Status.AMBIGUOUS,"ambiguous missing move order is never guessed");
+        check(ambiguous.history().isEmpty()&&ambiguous.position().fen().equals(Position.START),"ambiguous recovery leaves history unchanged");
+        GameTracker interrupted=new GameTracker(Position.start());Thread.currentThread().interrupt();
+        try{check(interrupted.recover(target.pieces()).status()==GameTracker.Status.RECOVERY_LIMIT&&interrupted.history().isEmpty(),"cancelled recovery cannot commit an unverified partial history");}finally{Thread.interrupted();}
+        BoardVision model=new BoardVision(true);model.calibrate(render(Position.start(),false,false),640,640,new BoardVision.Region(0,0,640));
+        GameMemory.Restored restored=GameMemory.decode(GameMemory.encode(four,model));
+        check(restored.game().history().size()==4&&restored.game().position().fen().equals(captured.fen()),"recovered history survives another service restart");
     }
     static void sessionTests()throws Exception{
         Position start=Position.start(),e4=play(start,"e2e4"),pair=play(start,"e2e4","e7e5");
