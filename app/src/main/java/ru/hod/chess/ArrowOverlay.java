@@ -6,6 +6,7 @@ import android.hardware.input.InputManager;
 import android.os.Build;
 import android.view.*;
 import ru.hod.chess.core.ArrowGeometry;
+import ru.hod.chess.core.BoardVision;
 
 /** Main-thread-only renderer. This window never accepts a touch or keyboard focus. */
 final class ArrowOverlay {
@@ -47,6 +48,7 @@ final class ArrowOverlay {
         params.y = geometry.region.top();
         params.width = params.height = geometry.region.size();
         view.geometry = geometry;
+        view.outline = null;
         if (!attached) {
             windows.addView(view, params);
             attached = true;
@@ -55,6 +57,15 @@ final class ArrowOverlay {
         }
         view.setVisibility(View.VISIBLE);
         view.invalidate();
+    }
+
+    void showOutline(BoardVision.Region region) {
+        params.x = region.left(); params.y = region.top();
+        params.width = params.height = region.size();
+        view.geometry = null; view.outline = region;
+        if (!attached) { windows.addView(view, params); attached = true; }
+        else windows.updateViewLayout(view, params);
+        view.setVisibility(View.VISIBLE); view.invalidate();
     }
 
     void hide() {
@@ -72,6 +83,7 @@ final class ArrowOverlay {
         final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         final int[] origin = new int[2];
         ArrowGeometry geometry;
+        BoardVision.Region outline;
 
         ArrowView(Context c) {
             super(c);
@@ -79,6 +91,18 @@ final class ArrowOverlay {
         }
 
         @Override protected void onDraw(Canvas canvas) {
+            if (outline != null) {
+                getLocationOnScreen(origin);
+                float left = outline.left() - origin[0], top = outline.top() - origin[1];
+                float cell = outline.size() / 8f;
+                paint.setColor(Ui.ACCENT); paint.setStrokeWidth(Ui.dp(getContext(), 1.5f));
+                paint.setStyle(Paint.Style.STROKE);
+                for (int i = 0; i <= 8; i++) {
+                    canvas.drawLine(left + i * cell, top, left + i * cell, top + outline.size(), paint);
+                    canvas.drawLine(left, top + i * cell, left + outline.size(), top + i * cell, paint);
+                }
+                return;
+            }
             ArrowGeometry g = geometry;
             if (g == null) return;
             getLocationOnScreen(origin);

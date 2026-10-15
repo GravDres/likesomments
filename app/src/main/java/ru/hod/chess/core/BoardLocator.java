@@ -1,0 +1,190 @@
+package ru.hod.chess.core;
+
+import java.util.*;
+
+/** Finds an unobscured, axis-aligned 8x8 board without a fixed theme or screen size. */
+public final class BoardLocator {
+    public record Detection(BoardVision.Region region, float gridScore, boolean whiteBottom,
+                            float orientationScore, boolean initialLayout, boolean ambiguous) {
+        public boolean automatic() { return gridScore >= .95f && !ambiguous; }
+        public boolean orientationKnown() { return initialLayout && orientationScore >= .6f; }
+    }
+    private record Run(int start, int end, int color) { int length() { return end - start; } }
+    private static final class Span {
+        final int start, size;
+        int votes = 1;
+        Span(int start, int size) { this.start = start; this.size = size; }
+    }
+    private record Scored(BoardVision.Region region, float score) {}
+
+    public Detection find(int[] pixels, int width, int height) {
+        if (width < 160 || height < 160 || pixels.length != width * height) return null;
+        int scale = Math.max(1, Math.min(width, height) / 600);
+        int w = width / scale, h = height / scale;
+        int[] small = new int[w * h];
+        for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) {
+            small[y * w + x] = pixels[(y * scale + scale / 2) * width + x * scale + scale / 2];
+        }
+        List<Span> horizontal = new ArrayList<>();
+        int minimumCell = Math.max(4, 20 / scale);
+        for (int y = 0; y < h; y += Math.max(3, h / 110)) {
+            collect(runs(small, w, h, y, false), minimumCell, -1,
+                    Math.min(w, h), w, horizontal);
+        }
+        horizontal.sort(Comparator.<Span>comparingInt(s -> s.votes).reversed()
+                .thenComparing(Comparator.comparingInt((Span s) -> s.size).reversed()));
+        List<Scored> candidates = new ArrayList<>();
+        for (Span xs : horizontal.subList(0, Math.min(20, horizontal.size()))) {
+            List<Span> vertical = new ArrayList<>();
+            for (int column : new int[]{1, 2, 4, 6}) for (float inset : new float[]{.08f, .92f}) {
+                int x = Math.round(xs.start + (column + inset) * xs.size / 8f);
+                if (x >= w) continue;
+                collect(runs(small, w, h, x, true), minimumCell,
+                        xs.size / 8f, Math.min(w, h), h, vertical);
+            }
+            for (Span ys : vertical) {
+                if (Math.abs(xs.size - ys.size) > Math.max(4, xs.size * .035f)) continue;
+                BoardVision.Region region = new BoardVision.Region(xs.start * scale,
+                        ys.start * scale, xs.size * scale);
+                if (!region.inside(width, height)) continue;
+                float score = gridScore(pixels, width, region);
+                if (score < .90f) continue;
+                boolean duplicate = false;
+                for (int i = 0; i < candidates.size(); i++) {
+                    Scored old = candidates.get(i);
+                    if (near(old.region(), region)) {
+                        if (score > old.score()) candidates.set(i, new Scored(region, score));
+                        duplicate = true;
+                        break;
+                    }
+                }
+                if (!duplicate) candidates.add(new Scored(region, score));
+            }
+        }
+        if (candidates.isEmpty()) return null;
+        candidates.sort(Comparator.<Scored>comparingDouble(Scored::score).reversed()
+                .thenComparing(Comparator.comparingInt((Scored s) -> s.region().size()).reversed()));
+        Scored best = candidates.get(0);
+        boolean ambiguous = candidates.stream().skip(1).anyMatch(s ->
+                s.score() >= best.score() - .025f && !sameBoard(best.region(), s.region()));
+        BoardVision.Region r = best.region();
+        boolean initial = true;
+        float topInk = 0, bottomInk = 0;
+        for (int square = 0; square < 64; square++) {
+            BoardVision.Feature feature = BoardVision.extract(pixels, width, r, square);
+            int row = square / 8;
+            if (row < 2 || row > 5) {
+                if (feature.occupancy() < .065f || feature.occupancy() > .85f) initial = false;
+            } else if (feature.occupancy() > .06f) initial = false;
+            if (row == 1) topInk += feature.ink();
+            if (row == 6) bottomInk += feature.ink();
+        }
+        float difference = (bottomInk - topInk) / 8f;
+        return new Detection(r, best.score(), difference >= 0,
+                initial ? Math.min(1, Math.abs(difference) / .28f) : 0, initial, ambiguous);
+    }
+
+    public static boolean near(BoardVision.Region a, BoardVision.Region b) {
+        int tolerance = Math.max(4, a.size() / 100);
+        return Math.abs(a.left() - b.left()) <= tolerance
+                && Math.abs(a.top() - b.top()) <= tolerance
+                && Math.abs(a.size() - b.size()) <= tolerance;
+    }
+
+    private static boolean sameBoard(BoardVision.Region a, BoardVision.Region b) {
+        return Math.abs(a.left() - b.left()) < a.size() / 4
+                && Math.abs(a.top() - b.top()) < a.size() / 4
+                && Math.abs(a.size() - b.size()) < a.size() / 4;
+    }
+
+    private static List<Run> runs(int[] image, int w, int h, int line, boolean vertical) {
+        int length = vertical ? h : w;
+        List<Run> result = new ArrayList<>();
+        int start = 0, reference = image[vertical ? line : line * w];
+        for (int i = 1; i < length; i++) {
+            int color = image[vertical ? i * w + line : line * w + i];
+            if (distance(color, reference) > 35 * 35) {
+                result.add(new Run(start, i, reference));
+                start = i;
+                reference = color;
+            }
+        }
+        result.add(new Run(start, length, reference));
+        return result;
+    }
+
+    private static void collect(List<Run> runs, int minimumCell, float expectedCell,
+                                int maxSize, int axisLength, List<Span> output) {
+        for (int count : new int[]{8, 6}) {
+            for (int i = 0; i + count <= runs.size(); i++) {
+                int[] widths = new int[count];
+                for (int j = 0; j < count; j++) widths[j] = runs.get(i + j).length();
+                Arrays.sort(widths);
+                float cell = widths[count / 2];
+                if (cell < minimumCell || cell * 8 > maxSize + 2
+                        || expectedCell > 0 && Math.abs(cell - expectedCell) > Math.max(2, expectedCell * .06f)) continue;
+                Run a = runs.get(i), b = runs.get(i + 1);
+                if (distance(a.color(), b.color()) < 40 * 40) continue;
+                boolean regular = true;
+                for (int j = 0; j < count; j++) {
+                    Run r = runs.get(i + j);
+                    if (Math.abs(r.length() - cell) > Math.max(2, cell * .10f)
+                            || distance(r.color(), (j & 1) == 0 ? a.color() : b.color()) > 35 * 35) {
+                        regular = false;
+                        break;
+                    }
+                }
+                if (!regular) continue;
+                // Six internal stripes still work when labels or the outside UI
+                // obscure the first/last square's border on a scanline.
+                int start = Math.round(a.start() - (count == 6 ? cell : 0));
+                int size = Math.round(cell * 8);
+                if (start < 0 || start + size > axisLength) continue;
+                Span match = null;
+                for (Span old : output) if (Math.abs(old.start - start) <= 2
+                        && Math.abs(old.size - size) <= 4) { match = old; break; }
+                if (match != null) match.votes++;
+                else if (output.size() < 300) output.add(new Span(start, size));
+            }
+        }
+    }
+
+    private static float gridScore(int[] pixels, int width, BoardVision.Region r) {
+        int[][] samples = new int[2][128];
+        int[] n = new int[2];
+        float cell = r.size() / 8f;
+        for (int row = 0; row < 8; row++) for (int col = 0; col < 8; col++) {
+            int parity = (row + col) & 1;
+            for (float dy : new float[]{.09f, .91f}) for (float dx : new float[]{.09f, .91f}) {
+                int x = r.left() + Math.round((col + dx) * cell);
+                int y = r.top() + Math.round((row + dy) * cell);
+                samples[parity][n[parity]++] = pixels[y * width + x];
+            }
+        }
+        int[] colors = {medianColor(samples[0]), medianColor(samples[1])};
+        if (distance(colors[0], colors[1]) < 35 * 35) return 0;
+        int matches = 0;
+        for (int parity = 0; parity < 2; parity++) for (int color : samples[parity]) {
+            if (distance(color, colors[parity]) <= 42 * 42) matches++;
+        }
+        return matches / 256f;
+    }
+
+    private static int medianColor(int[] colors) {
+        int[] channel = new int[colors.length];
+        int result = 0xff000000;
+        for (int shift : new int[]{16, 8, 0}) {
+            for (int i = 0; i < colors.length; i++) channel[i] = colors[i] >> shift & 255;
+            Arrays.sort(channel);
+            result |= channel[channel.length / 2] << shift;
+        }
+        return result;
+    }
+
+    private static int distance(int a, int b) {
+        int r = (a >> 16 & 255) - (b >> 16 & 255);
+        int g = (a >> 8 & 255) - (b >> 8 & 255);
+        int blue = (a & 255) - (b & 255);
+        return r * r + g * g + blue * blue;
+    }
+}

@@ -32,10 +32,47 @@ public final class CoreTest {
         check(result.get()!=null&&result.get().bestMove()!=null,"fallback returns move");check(Position.fromFen("6k1/5ppp/8/8/8/8/5PPP/3Q2K1 w - - 0 1").legalMoves().contains(result.get().bestMove()),"engine move legal");
         for(String invalid:new String[]{"8/8/8/8/8/8/8/4K2k w K - 0 1","8/8/8/8/8/8/8/4Kk2 w - - 0 1","P6k/8/8/8/8/8/8/7K w - - 0 1"}){boolean rejected=false;try{Position.fromFen(invalid);}catch(IllegalArgumentException e){rejected=true;}check(rejected,"reject impossible FEN");}
         visionTests();
+        locatorTests();
+        autoSearchTests();
         arrowTests();
         uciTests();
         System.out.println("PASS: "+count+" assertions, including 197281 + 97862 perft leaf positions");
     }
+    static void locatorTests(){
+        BoardLocator locator=new BoardLocator();
+        int[][] cases={{480,1000,0,220,480},{1080,2280,16,450,1040},{1264,2780,16,620,1232},{1900,1000,500,100,800},{720,1440,48,300,624}};
+        for(int[] c:cases)for(boolean black:new boolean[]{false,true}){
+            int[] image=screen(c[0],c[1],c[2],c[3],c[4],black);
+            BoardLocator.Detection detection=locator.find(image,c[0],c[1]);
+            check(detection!=null,"board found at "+Arrays.toString(c));
+            check(BoardLocator.near(detection.region(),new BoardVision.Region(c[2],c[3],c[4])),"correct automatic bounds");
+            check(detection.automatic()&&detection.initialLayout(),"initial grid accepted confidently");
+            check(detection.orientationKnown()&&detection.whiteBottom()!=black,"automatic side orientation");
+        }
+        int[] blank=new int[480*1000];Arrays.fill(blank,0xff161b19);check(locator.find(blank,480,1000)==null,"plain app screen rejected");
+        int[] image=screen(480,1000,0,220,480,false);
+        for(int y=370;y<500;y++)Arrays.fill(image,y*480+100,y*480+390,0xff212121);
+        BoardLocator.Detection occluded=locator.find(image,480,1000);check(occluded==null||!occluded.automatic(),"dialog on board is not accepted automatically");
+        int[] themed=screen(720,1440,48,300,624,false);Random noise=new Random(12);
+        for(int i=0;i<themed.length;i++){int p=themed[i];if(p==0xffe6e7cb)p=0xffd8e6ef;else if(p==0xff789154)p=0xff46759b;int delta=noise.nextInt(7)-3;themed[i]=0xff000000|Math.max(0,Math.min(255,(p>>16&255)+delta))<<16|Math.max(0,Math.min(255,(p>>8&255)+delta))<<8|Math.max(0,Math.min(255,(p&255)+delta));}
+        BoardLocator.Detection blue=locator.find(themed,720,1440);check(blue!=null&&blue.automatic()&&BoardLocator.near(blue.region(),new BoardVision.Region(48,300,624)),"different palette and pixel noise");
+        int[] two=screen(1000,1600,10,100,400,false);int[] second=screen(1000,1600,560,1000,400,true);for(int y=1000;y<1400;y++)System.arraycopy(second,y*1000+560,two,y*1000+560,400);BoardLocator.Detection ambiguous=locator.find(two,1000,1600);check(ambiguous!=null&&ambiguous.ambiguous()&&!ambiguous.automatic(),"two large boards require user verification");
+    }
+    static void autoSearchTests(){
+        int[] first=screen(720,1440,40,300,640,false);AutoBoardSearch search=new AutoBoardSearch();
+        AutoBoardSearch.Result a=search.inspect(first,720,1440,null,null);check(a.state()==AutoBoardSearch.State.VERIFYING,"one screenshot does not auto-calibrate");
+        AutoBoardSearch.Result b=search.inspect(first,720,1440,null,null);check(b.state()==AutoBoardSearch.State.READY&&b.calibration().whiteBottom()&&!b.calibration().reuseGame(),"two stable screenshots calibrate without a rectangle");
+        GameTracker game=new GameTracker(Position.start());Position played=play(Position.start(),"e2e4","e7e5");game.accept(played.pieces());
+        int[] moved=screenWith(played,1000,1500,220,350,640,true);AutoBoardSearch relocated=new AutoBoardSearch();
+        AutoBoardSearch.Result before=relocated.inspect(moved,1000,1500,b.calibration().vision(),game);check(before.state()==AutoBoardSearch.State.VERIFYING,"existing game can be relocated in the middle");
+        AutoBoardSearch.Result after=relocated.inspect(moved,1000,1500,b.calibration().vision(),game);check(after.state()==AutoBoardSearch.State.READY&&after.calibration().reuseGame()&&!after.calibration().whiteBottom(),"relocation detects rotation and retains game");check(game.history().size()==2&&game.position().fen().equals(played.fen()),"probing does not mutate live history");
+        AutoBoardSearch fresh=new AutoBoardSearch();check(fresh.inspect(moved,1000,1500,null,null).state()==AutoBoardSearch.State.NEED_INITIAL,"fresh midgame screenshot is not mislabeled as starting pieces");
+        int[] gray=first.clone();for(int i=0;i<gray.length;i++)if(gray[i]==0xfffafafa||gray[i]==0xff242424)gray[i]=0xff606060;
+        check(new AutoBoardSearch().inspect(gray,720,1440,null,null).state()==AutoBoardSearch.State.NEED_ORIENTATION,"ambiguous piece colors are not guessed");
+        AutoBoardSearch interrupted=new AutoBoardSearch();interrupted.inspect(first,720,1440,null,null);int[] empty=new int[first.length];Arrays.fill(empty,0xff181c19);interrupted.inspect(empty,720,1440,null,null);check(interrupted.inspect(first,720,1440,null,null).state()==AutoBoardSearch.State.VERIFYING,"lost board resets stable-frame verification");
+    }
+    static int[] screen(int w,int h,int left,int top,int size,boolean rotated){return screenWith(Position.start(),w,h,left,top,size,rotated);}
+    static int[] screenWith(Position p,int w,int h,int left,int top,int size,boolean rotated){int[] pixels=new int[w*h];Arrays.fill(pixels,0xff202523);int[] board=render(p,false,rotated);for(int y=0;y<size;y++)for(int x=0;x<size;x++)pixels[(top+y)*w+left+x]=board[(y*640/size)*640+x*640/size];return pixels;}
     static void arrowTests(){
         BoardVision.Region r=new BoardVision.Region(20,100,640);
         ArrowGeometry white=new ArrowGeometry(r,Move.parse("g1f3"),true);

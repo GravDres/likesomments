@@ -12,6 +12,7 @@ public final class BoardVision {
     private final List<Template> templates=new ArrayList<>();
     private final boolean whiteBottom;
     public BoardVision(boolean whiteBottom){this.whiteBottom=whiteBottom;}
+    public BoardVision withOrientation(boolean whiteBottom){BoardVision copy=new BoardVision(whiteBottom);copy.templates.addAll(templates);return copy;}
     public int templateCount(){return templates.size();}
     public void calibrate(int[] pixels,int w,int h,Region region) {
         if(!region.inside(w,h))throw new IllegalArgumentException("Область доски вне экрана");
