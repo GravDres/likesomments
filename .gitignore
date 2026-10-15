@@ -1,0 +1,9 @@
+.gradle/
+**/build/
+local.properties
+.idea/
+*.jks
+tools/
+third_party/
+app/src/main/jniLibs/
+artifacts/
