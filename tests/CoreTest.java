@@ -34,9 +34,44 @@ public final class CoreTest {
         visionTests();
         locatorTests();
         autoSearchTests();
+        sessionTests();
         arrowTests();
         uciTests();
         System.out.println("PASS: "+count+" assertions, including 197281 + 97862 perft leaf positions");
+    }
+    static void sessionTests()throws Exception{
+        Position start=Position.start(),e4=play(start,"e2e4"),pair=play(start,"e2e4","e7e5");
+        check(PlayerSide.WHITE.ownsTurn(start)&&!PlayerSide.BLACK.ownsTurn(start),"only White receives a suggestion at start");
+        check(!PlayerSide.WHITE.ownsTurn(e4)&&PlayerSide.BLACK.ownsTurn(e4),"White waits after e4, Black can analyze");
+        check(PlayerSide.WHITE.ownsTurn(pair)&&!PlayerSide.BLACK.ownsTurn(pair),"White resumes only after opponent's reply");
+        StableBoard stability=new StableBoard();GameTracker game=new GameTracker(start);
+        BoardVision.Observation clean=new BoardVision.Observation(e4.pieces(),1,0);
+        check(!stability.accept(clean),"one moving frame never confirms a move");
+        check(!stability.accept(new BoardVision.Observation(pair.pieces(),0,2)),"uncertain animation resets stable verification");
+        check(!stability.accept(clean)&&stability.accept(clean),"two clean frames after animation confirm");game.accept(e4.pieces());
+        check(game.history().size()==1&&game.position().fen().equals(e4.fen()),"only observed legal moves enter game history");
+        check(game.accept(start.pieces()).status()==GameTracker.Status.UNRECOGNIZED&&game.history().size()==1,"stale start screen cannot reset a running game");
+        BoardVision vision=new BoardVision(true);vision.calibrate(render(start,false,false),640,640,new BoardVision.Region(0,0,640));
+        byte[] bytes=GameMemory.encode(game,vision);GameMemory.Restored restored=GameMemory.decode(bytes);
+        check(restored.game().position().fen().equals(e4.fen())&&restored.game().history().equals(game.history()),"restart restores exact turn, castling and en passant metadata");
+        BoardVision.Observation seen=restored.vision().recognize(render(pair,true,false),640,640,new BoardVision.Region(0,0,640));
+        check(seen.uncertain()==0&&restored.game().accept(seen.board()).status()==GameTracker.Status.MOVED,"restored piece theme can continue the saved game");
+        GameTracker repeat=GameTracker.replay(List.of(Move.parse("g1f3"),Move.parse("g8f6"),Move.parse("f3g1"),Move.parse("f6g8"),Move.parse("g1f3"),Move.parse("g8f6"),Move.parse("f3g1"),Move.parse("f6g8")));
+        GameMemory.Restored repeats=GameMemory.decode(GameMemory.encode(repeat,vision));
+        check(repeats.game().repetitionCount()==3&&repeats.game().claimableDraw()!=null,"restart preserves repetition counts, including returns to initial placement");
+        check(repeats.game().history().size()==8,"a return to initial arrangement retains every ply");
+        AutoBoardSearch search=new AutoBoardSearch();int[] initial=screen(720,1440,40,300,640,false);
+        check(search.inspect(initial,720,1440,vision,game).state()==AutoBoardSearch.State.NEED_NEW_GAME,"automatic calibration never silently discards another game");
+        AutoBoardSearch returned=new AutoBoardSearch();returned.inspect(initial,720,1440,vision,repeat);
+        check(returned.inspect(initial,720,1440,vision,repeat).calibration().reuseGame(),"legal return to start can be relocated without losing repetition history");
+        byte[] broken=bytes.clone();broken[broken.length/2]^=0x42;boolean rejected=false;
+        try{GameMemory.decode(broken);}catch(java.io.IOException e){rejected=true;}check(rejected,"corrupt session snapshot rejected");
+        boolean illegal=false;try{GameTracker.replay(List.of(Move.parse("e2e5")));}catch(IllegalArgumentException e){illegal=true;}check(illegal,"restoration rejects illegal move history");
+        int[] full=screenWith(pair,1000,1500,220,350,640,false),crop=new int[640*640];
+        for(int row=0;row<640;row++)System.arraycopy(full,(350+row)*1000+220,crop,row*640,640);
+        check(vision.recognize(crop,640,640,new BoardVision.Region(0,0,640)).uncertain()==0&&Arrays.equals(vision.recognize(crop,640,640,new BoardVision.Region(0,0,640)).board(),pair.pieces()),"board-only capture preserves recognition at nonzero screen coordinates");
+        ArrowGeometry local=new ArrowGeometry(new BoardVision.Region(0,0,640),Move.parse("g1f3"),true);
+        check(!BoardChangeDetector.changed(crop,withArrow(crop,640,local),640,640,local),"cropped arrow baseline does not produce false board movement");
     }
     static void locatorTests(){
         BoardLocator locator=new BoardLocator();

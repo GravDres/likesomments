@@ -4,7 +4,7 @@ import java.util.*;
 
 /** A two-frame calibration protocol. It never mutates the live game while probing. */
 public final class AutoBoardSearch {
-    public enum State { SEARCHING, UNCERTAIN_GRID, NEED_INITIAL, NEED_ORIENTATION, VERIFYING, READY }
+    public enum State { SEARCHING, UNCERTAIN_GRID, NEED_INITIAL, NEED_NEW_GAME, NEED_ORIENTATION, VERIFYING, READY }
     public record Calibration(BoardVision.Region region, BoardVision vision,
                               boolean whiteBottom, boolean reuseGame) {}
     public record Result(State state, BoardLocator.Detection detection,
@@ -56,6 +56,9 @@ public final class AutoBoardSearch {
         }
         if (!d.initialLayout()) {
             return result(State.NEED_INITIAL, d, null, "Доска найдена · для первого обучения нужна начальная расстановка");
+        }
+        if(game!=null&&!game.history().isEmpty()){
+            return result(State.NEED_NEW_GAME,d,null,"Начальная расстановка другой партии · нажми «Новая партия»");
         }
         if (!d.orientationKnown()) {
             return result(State.NEED_ORIENTATION, d, null, "Доска найдена · цвета фигур неоднозначны, нужна проверка стороны");

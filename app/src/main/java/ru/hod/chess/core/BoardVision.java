@@ -1,6 +1,7 @@
 package ru.hod.chess.core;
 
 import java.util.*;
+import java.io.*;
 
 /** Per-theme shape templates, trained on a verified initial board, no network. */
 public final class BoardVision {
@@ -14,6 +15,22 @@ public final class BoardVision {
     public BoardVision(boolean whiteBottom){this.whiteBottom=whiteBottom;}
     public BoardVision withOrientation(boolean whiteBottom){BoardVision copy=new BoardVision(whiteBottom);copy.templates.addAll(templates);return copy;}
     public int templateCount(){return templates.size();}
+    void writeTo(DataOutput out)throws IOException{
+        out.writeBoolean(whiteBottom);out.writeInt(templates.size());
+        for(Template t:templates){out.writeChar(t.piece());out.writeFloat(t.feature().ink());out.writeFloat(t.feature().occupancy());for(float value:t.feature().mask())out.writeFloat(value);}
+    }
+    static BoardVision readFrom(DataInput in)throws IOException{
+        BoardVision model=new BoardVision(in.readBoolean());int count=in.readInt();
+        if(count!=32)throw new IOException("Некорректные шаблоны фигур");
+        Set<Character> kinds=new HashSet<>();
+        for(int i=0;i<count;i++){
+            char piece=in.readChar();if("pnbrqkPNBRQK".indexOf(piece)<0)throw new IOException("Некорректный шаблон");kinds.add(piece);
+            float ink=unit(in.readFloat()),occupancy=unit(in.readFloat());float[] mask=new float[N*N];for(int k=0;k<mask.length;k++)mask[k]=unit(in.readFloat());
+            model.templates.add(new Template(piece,new Feature(mask,ink,occupancy)));
+        }
+        if(kinds.size()!=12)throw new IOException("Нет всех типов фигур");return model;
+    }
+    private static float unit(float value)throws IOException{if(!Float.isFinite(value)||value<0||value>1)throw new IOException("Повреждённый шаблон");return value;}
     public void calibrate(int[] pixels,int w,int h,Region region) {
         if(!region.inside(w,h))throw new IllegalArgumentException("Область доски вне экрана");
         List<Template> pending=new ArrayList<>();Position start=Position.start();Set<Character> labels=new HashSet<>();

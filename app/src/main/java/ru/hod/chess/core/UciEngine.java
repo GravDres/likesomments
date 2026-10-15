@@ -20,14 +20,17 @@ public final class UciEngine implements ChessEngine {
         process=new ProcessBuilder(executable.getAbsolutePath()).redirectErrorStream(true).start();
         input=new BufferedWriter(new OutputStreamWriter(process.getOutputStream(),StandardCharsets.UTF_8));
         Thread reader=new Thread(()->{try(BufferedReader r=new BufferedReader(new InputStreamReader(process.getInputStream(),StandardCharsets.UTF_8))){String line;while((line=r.readLine())!=null&&!closed){if(!output.offer(line)){output.poll();output.offer(line);}}}catch(IOException ignored){}},"uci-output");reader.setDaemon(true);reader.start();
-        try {send("uci");await("uciok",8000);send("setoption name Hash value 128");send("setoption name Skill Level value 20");send("setoption name UCI_LimitStrength value false");configure(threads,variations);}catch(Exception e){close();throw e;}
+        try {send("uci");await("uciok",8000);send("setoption name Skill Level value 20");send("setoption name UCI_LimitStrength value false");configure(threads,variations);newGame();}catch(Exception e){close();throw e;}
     }
     public String name(){return "Stockfish 19";}
     public synchronized void configure(int threads,int variations)throws Exception{
         int t=Math.max(1,Math.min(4,threads)),v=variations==3?3:1;
         if(t==configuredThreads&&v==configuredVariations)return;
-        send("setoption name Threads value "+t);send("setoption name MultiPV value "+v);send("isready");await("readyok",8000);configuredThreads=t;configuredVariations=v;
+        if(t!=configuredThreads){send("setoption name Threads value "+t);send("setoption name Hash value 256");}
+        send("setoption name MultiPV value "+v);send("isready");await("readyok",8000);configuredThreads=t;configuredVariations=v;
     }
+    /** Called only for a different game; normal moves retain the engine's search table. */
+    public synchronized void newGame()throws Exception{send("ucinewgame");send("isready");await("readyok",8000);}
     private void send(String s)throws IOException{input.write(s);input.newLine();input.flush();}
     private void await(String expected,int millis)throws Exception{
         long end=System.nanoTime()+millis*1_000_000L;while(System.nanoTime()<end){String line=output.poll(100,TimeUnit.MILLISECONDS);if(line!=null&&line.equals(expected))return;if(!process.isAlive())throw new IOException("Шахматный движок завершился");}throw new IOException("Нет ответа движка: "+expected);

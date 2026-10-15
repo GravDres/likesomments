@@ -10,9 +10,14 @@ public final class GameTracker {
     private final List<Move> history=new ArrayList<>();
     private final Map<String,Integer> repetitions=new HashMap<>();
     public GameTracker(Position initial){current=initial;repetitions.put(initial.repetitionKey(),1);}
-    public Position position(){return current;}
-    public List<Move> history(){return List.copyOf(history);}
-    public Update accept(char[] board) {
+    public static GameTracker replay(List<Move> moves){
+        GameTracker game=new GameTracker(Position.start());
+        for(Move move:moves){game.current=game.current.play(move);game.history.add(move);game.repetitions.merge(game.current.repetitionKey(),1,Integer::sum);}
+        return game;
+    }
+    public synchronized Position position(){return current;}
+    public synchronized List<Move> history(){return List.copyOf(history);}
+    public synchronized Update accept(char[] board) {
         if(current.matches(board))return new Update(Status.SAME,current,List.of());
         List<Move> next=current.legalMoves(); List<Move> found=null;Position result=null;
         for(Move a:next){Position p=current.applyUnchecked(a);if(p.matches(board)){if(found!=null)return new Update(Status.AMBIGUOUS,current,List.of());found=List.of(a);result=p;}}
@@ -20,12 +25,12 @@ public final class GameTracker {
         if(found==null)return new Update(Status.UNRECOGNIZED,current,List.of());
         for(Move m:found){current=current.applyUnchecked(m);repetitions.merge(current.repetitionKey(),1,Integer::sum);}history.addAll(found);return new Update(Status.MOVED,current,found);
     }
-    public int repetitionCount(){return repetitions.getOrDefault(current.repetitionKey(),0);}
-    public String automaticDraw(){
+    public synchronized int repetitionCount(){return repetitions.getOrDefault(current.repetitionKey(),0);}
+    public synchronized String automaticDraw(){
         if(current.insufficientMaterial())return "Недостаточно материала для мата";
         if(current.halfmove>=150)return "Правило 75 ходов";
         if(repetitionCount()>=5)return "Пятикратное повторение позиции";
         return null;
     }
-    public String claimableDraw(){if(current.halfmove>=100)return "Можно заявить ничью по правилу 50 ходов";if(repetitionCount()>=3)return "Можно заявить ничью по повторению позиции";return null;}
+    public synchronized String claimableDraw(){if(current.halfmove>=100)return "Можно заявить ничью по правилу 50 ходов";if(repetitionCount()>=3)return "Можно заявить ничью по повторению позиции";return null;}
 }
