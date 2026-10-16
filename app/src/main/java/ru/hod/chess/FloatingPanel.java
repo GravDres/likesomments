@@ -11,7 +11,8 @@ final class FloatingPanel {
     interface Actions {void calibrate();void manual();void recover();void verify();void review();void side(PlayerSide side);void newGame();void pause(boolean value);void arrows(boolean value);void deeper();void stop();}
     private final Context c;private final WindowManager wm;private final WindowManager.LayoutParams lp;
     private final LinearLayout root;private final ScrollView bodyScroll;
-    private final TextView status,score,move,details,variants,compactSummary,health;
+    private final TextView status,score,move,details,variants,compactSummary,health,captureDot;
+    private boolean pulse;
     private final Button collapse,pause,arrowToggle,sideButton,lockButton;
     private final SharedPreferences prefs;
     private boolean arrowsEnabled,locked,compact=true,paused,closed,dragging;
@@ -21,8 +22,8 @@ final class FloatingPanel {
         this.c=c;prefs=c.getSharedPreferences("hod",Context.MODE_PRIVATE);wm=c.getSystemService(WindowManager.class);
         side=prefs.getBoolean("playerWhite",true)?PlayerSide.WHITE:PlayerSide.BLACK;locked=prefs.getBoolean("panelLocked",true);
         root=Ui.col(c);Ui.pad(root,10);root.setBackground(Ui.shape(Ui.CARD,Ui.dp(c,20)));root.setElevation(Ui.dp(c,12));
-        LinearLayout title=Ui.row(c);TextView logo=Ui.bold(c,"♞  ХОД",17,Ui.ACCENT);title.addView(logo,new LinearLayout.LayoutParams(0,Ui.dp(c,38),1));
-        collapse=small("+",()->setCompact(!compact));title.addView(collapse);title.addView(small("↻",actions::recover));root.addView(title);
+        LinearLayout title=Ui.row(c);captureDot=Ui.text(c,"●",10,Ui.ACCENT);captureDot.setGravity(Gravity.CENTER);title.addView(captureDot,new LinearLayout.LayoutParams(Ui.dp(c,14),Ui.dp(c,38)));TextView logo=Ui.bold(c,"♞  ХОД",17,Ui.ACCENT);title.addView(logo,new LinearLayout.LayoutParams(0,Ui.dp(c,38),1));
+        collapse=small("+",()->setCompact(!compact));title.addView(collapse);Button refresh=small("↻",actions::recover);refresh.setContentDescription("Обновить доску и проверить текущую или новую партию");title.addView(refresh);root.addView(title);
         compactSummary=Ui.bold(c,"Ищу начальную доску…",13,Ui.INK);compactSummary.setLines(2);compactSummary.setEllipsize(TextUtils.TruncateAt.END);compactSummary.setGravity(Gravity.CENTER_VERTICAL);root.addView(compactSummary,new LinearLayout.LayoutParams(-1,Ui.dp(c,48)));
         LinearLayout quick=Ui.row(c);quick.addView(small("Проверить",actions::verify),new LinearLayout.LayoutParams(0,Ui.dp(c,34),1));quick.addView(small("Позиция",actions::review),new LinearLayout.LayoutParams(0,Ui.dp(c,34),1));root.addView(quick);
         compactSummary.setOnClickListener(v->{if(lastMessage!=null){android.app.AlertDialog dialog=new android.app.AlertDialog.Builder(c).setTitle("Состояние помощника").setMessage(lastMessage).setPositiveButton("Понятно",null).create();dialog.getWindow().setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY);dialog.show();}});
@@ -102,8 +103,15 @@ final class FloatingPanel {
     void terminal(Position p){if(closed)return;compactSummary.setText(p.inCheck(p.white)?"Мат · партия завершена":"Пат · ничья");status.setText("Партия завершена");score.setText(p.inCheck(p.white)?"МАТ":"½–½");move.setText(p.inCheck(p.white)?(p.white?"Чёрные выиграли":"Белые выиграли"):"Пат");details.setText("Для следующей игры нажми «Новая партия»");variants.setText("");}
     void draw(String reason){if(closed)return;compactSummary.setText("Ничья · "+reason);status.setText("Партия завершена");score.setText("½–½");move.setText("Ничья");details.setText(reason);variants.setText("");}
     void health(String text){if(!closed&&!text.contentEquals(health.getText()))health.setText(text);}
+    void capturePulse(){if(!closed){pulse=!pulse;captureDot.setTextColor(pulse?Ui.ACCENT:0xff91b755);}}
     void ensureAttached(){if(closed)return;if(!root.isAttachedToWindow()){clamp();try{wm.addView(root,lp);}catch(IllegalStateException|IllegalArgumentException e){try{wm.removeViewImmediate(root);}catch(IllegalArgumentException ignored){}wm.addView(root,lp);}root.post(this::updateBounds);}root.setVisibility(View.VISIBLE);}
     void prepareSearch(){setCompact(true);if(board==null){lp.x=Ui.dp(c,8);lp.y=Ui.dp(c,32);clamp();wm.updateViewLayout(root,lp);root.post(this::updateBounds);}message("Ищу доску · окно остаётся на экране");}
+    void searchCorner(int corner){
+        if(closed)return;setCompact(true);android.util.DisplayMetrics m=metrics();
+        lp.x=(corner&1)==0?Ui.dp(c,8):m.widthPixels-lp.width-Ui.dp(c,8);
+        lp.y=corner<2?Ui.dp(c,32):m.heightPixels-lp.height-Ui.dp(c,32);
+        clamp();wm.updateViewLayout(root,lp);root.post(this::updateBounds);
+    }
     void setPaused(boolean value){paused=value;pauseText();}
     void close(){if(closed)return;closed=true;try{wm.removeView(root);}catch(IllegalArgumentException ignored){}}
 }

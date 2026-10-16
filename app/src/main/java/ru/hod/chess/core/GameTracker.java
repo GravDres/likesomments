@@ -6,6 +6,18 @@ import java.util.*;
 public final class GameTracker {
     public enum Status { SAME, MOVED, UNRECOGNIZED, AMBIGUOUS, RECOVERY_LIMIT }
     public record Update(Status status, Position position, List<Move> moves) {}
+    public record Snapshot(Position initial,Position position,List<Move> moves) {
+        public Snapshot{moves=List.copyOf(moves);}
+        public Snapshot append(List<Move> extra){
+            Position next=position;List<Move> all=new ArrayList<>(moves);
+            for(Move move:extra){next=next.play(move);all.add(move);}return new Snapshot(initial,next,all);
+        }
+        public GameTracker restore(){
+            GameTracker restored=GameTracker.replay(initial,moves);
+            if(!restored.position().fen().equals(position.fen()))throw new IllegalArgumentException("Снимок истории не соответствует позиции");
+            return restored;
+        }
+    }
     private Position current;private final Position initial;
     private final List<Move> history=new ArrayList<>();
     private final Map<String,Integer> repetitions=new HashMap<>();
@@ -21,6 +33,7 @@ public final class GameTracker {
     public Position initial(){return initial;}
     public synchronized Position position(){return current;}
     public synchronized List<Move> history(){return List.copyOf(history);}
+    public synchronized Snapshot snapshot(){return new Snapshot(initial,current,history);}
     public synchronized Update accept(char[] board) {
         if(current.matches(board))return new Update(Status.SAME,current,List.of());
         List<Move> next=current.legalMoves(); List<Move> found=null;Position result=null;

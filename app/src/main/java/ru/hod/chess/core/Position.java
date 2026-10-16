@@ -25,7 +25,7 @@ public final class Position {
     public static Position fromFen(String fen) {
         String[] f=fen.trim().split("\\s+");
         if(f.length!=6 || !f[1].matches("[wb]") || !f[2].matches("-|K?Q?k?q?")) throw new IllegalArgumentException("Нужен полный FEN из 6 полей");
-        String[] rows=f[0].split("/"); if(rows.length!=8) throw new IllegalArgumentException("Нужно 8 горизонталей");
+        String[] rows=f[0].split("/",-1); if(rows.length!=8) throw new IllegalArgumentException("Нужно 8 горизонталей");
         char[] b=new char[64]; Arrays.fill(b,'.'); int wk=0,bk=0;
         for(int r=0;r<8;r++) { int c=0; for(char p:rows[r].toCharArray()) {
             if(p>='1'&&p<='8') c+=p-'0';
@@ -42,7 +42,7 @@ public final class Position {
             if(Character.toLowerCase(piece)=='p'){if(i/8==0||i/8==7)throw new IllegalArgumentException("Пешка на последней горизонтали должна превратиться");if(isWhite(piece))whitePawns++;else blackPawns++;}}
         if(whitePieces>16||blackPieces>16||whitePawns>8||blackPawns>8)throw new IllegalArgumentException("Слишком много фигур");
         if((rights&3)!=0&&b[60]!='K'||(rights&12)!=0&&b[4]!='k'||(rights&1)!=0&&b[63]!='R'||(rights&2)!=0&&b[56]!='R'||(rights&4)!=0&&b[7]!='r'||(rights&8)!=0&&b[0]!='r')throw new IllegalArgumentException("Права рокировки не соответствуют фигурам");
-        if(e>=0&&(b[e]!='.'||b[e+(position.white?8:-8)]!=(position.white?'p':'P')))throw new IllegalArgumentException("Нет пешки для взятия на проходе");
+        if(e>=0&&(b[e]!='.'||b[e+(position.white?8:-8)]!=(position.white?'p':'P')||b[e+(position.white?-8:8)]!='.'||h!=0))throw new IllegalArgumentException("Поле en passant не соответствует последнему двойному ходу пешки");
         if(position.inCheck(!position.white))throw new IllegalArgumentException("Король стороны, которая уже сходила, не может оставаться под шахом");
         return position;
     }

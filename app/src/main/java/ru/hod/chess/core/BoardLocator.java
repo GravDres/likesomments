@@ -4,6 +4,7 @@ import java.util.*;
 
 /** Finds an unobscured, axis-aligned 8x8 board without a fixed theme or screen size. */
 public final class BoardLocator {
+    private static final float[] EDGE_INSETS={.12f,.88f};
     public record Detection(BoardVision.Region region, float gridScore, boolean whiteBottom,
                             float orientationScore, boolean initialLayout, boolean ambiguous) {
         public boolean automatic() { return gridScore >= .95f && !ambiguous; }
@@ -18,6 +19,11 @@ public final class BoardLocator {
     private record Scored(BoardVision.Region region, float score) {}
 
     public Detection find(int[] pixels, int width, int height) {
+        return find(pixels,width,height,null);
+    }
+
+    /** A remembered rectangle is a candidate only; it must still pass the current grid. */
+    public Detection find(int[] pixels, int width, int height, BoardVision.Region hint) {
         if (width < 160 || height < 160 || pixels.length != width * height) return null;
         int scale = Math.max(1, Math.min(width, height) / 600);
         int w = width / scale, h = height / scale;
@@ -34,7 +40,11 @@ public final class BoardLocator {
         horizontal.sort(Comparator.<Span>comparingInt(s -> s.votes).reversed()
                 .thenComparing(Comparator.comparingInt((Span s) -> s.size).reversed()));
         List<Scored> candidates = new ArrayList<>();
-        for (Span xs : horizontal.subList(0, Math.min(20, horizontal.size()))) {
+        if(hint!=null&&hint.inside(width,height)){
+            float score=gridScore(pixels,width,hint);
+            if(score>=.90f)candidates.add(new Scored(hint,score));
+        }
+        for (Span xs : horizontal.subList(0, Math.min(48, horizontal.size()))) {
             List<Span> vertical = new ArrayList<>();
             for (int column : new int[]{1, 2, 4, 6}) for (float inset : new float[]{.08f, .92f}) {
                 int x = Math.round(xs.start + (column + inset) * xs.size / 8f);
@@ -85,11 +95,15 @@ public final class BoardLocator {
     }
 
     private static BoardVision.Region refine(int[] pixels,int width,int height,BoardVision.Region seed){
+        float minimum=gridScore(pixels,width,seed)-.016f;
+        BoardVision.Region coarse=refinePass(pixels,width,height,seed,Math.max(6,Math.min(12,seed.size()/64)),2,minimum);
+        return refinePass(pixels,width,height,coarse,2,1,minimum);
+    }
+    private static BoardVision.Region refinePass(int[] pixels,int width,int height,BoardVision.Region seed,int radius,int step,float minimum){
         BoardVision.Region best=seed;float score=edgeStrength(pixels,width,seed);
-        int radius=Math.max(3,Math.min(6,seed.size()/120));float minimum=gridScore(pixels,width,seed)-.016f;
-        for(int size=seed.size()-radius;size<=seed.size()+radius;size++)
-            for(int left=seed.left()-radius;left<=seed.left()+radius;left++)
-                for(int top=seed.top()-radius;top<=seed.top()+radius;top++){
+        for(int size=seed.size()-radius;size<=seed.size()+radius;size+=step)
+            for(int left=seed.left()-radius;left<=seed.left()+radius;left+=step)
+                for(int top=seed.top()-radius;top<=seed.top()+radius;top+=step){
                     BoardVision.Region r=new BoardVision.Region(left,top,size);if(!r.inside(width,height))continue;
                     float value=edgeStrength(pixels,width,r);
                     if(value>score+.001f&&gridScore(pixels,width,r)>=minimum){score=value;best=r;}
@@ -98,7 +112,7 @@ public final class BoardLocator {
     }
     private static float edgeStrength(int[] pixels,int width,BoardVision.Region r){
         float sum=0,cell=r.size()/8f;
-        for(int edge=1;edge<8;edge++)for(int along=0;along<8;along++)for(float inset:new float[]{.12f,.88f}){
+        for(int edge=1;edge<8;edge++)for(int along=0;along<8;along++)for(float inset:EDGE_INSETS){
             int x=r.left()+Math.round(edge*cell),y=r.top()+Math.round((along+inset)*cell);
             sum+=Math.min(30_000,distance(pixels[y*width+x-1],pixels[y*width+x+1]));
             x=r.left()+Math.round((along+inset)*cell);y=r.top()+Math.round(edge*cell);
@@ -146,7 +160,7 @@ public final class BoardLocator {
 
     private static void collect(List<Run> runs, int minimumCell, float expectedCell,
                                 int maxSize, int axisLength, List<Span> output) {
-        for (int count : new int[]{8, 6}) {
+        for (int count : new int[]{8, 6, 4}) {
             for (int i = 0; i + count <= runs.size(); i++) {
                 float cell = (runs.get(i + count - 1).end() - runs.get(i).start()) / (float) count;
                 if (cell < minimumCell || cell * 8 > maxSize + 2
@@ -163,16 +177,19 @@ public final class BoardLocator {
                     }
                 }
                 if (!regular) continue;
-                // Six internal stripes still work when labels or the outside UI
-                // obscure the first/last square's border on a scanline.
-                int start = Math.round(a.start() - (count == 6 ? cell : 0));
                 int size = Math.round(cell * 8);
-                if (start < 0 || start + size > axisLength) continue;
-                Span match = null;
-                for (Span old : output) if (Math.abs(old.start - start) <= 2
-                        && Math.abs(old.size - size) <= 4) { match = old; break; }
-                if (match != null) match.votes++;
-                else if (output.size() < 300) output.add(new Span(start, size));
+                // Highlights, coordinate labels and pieces can interrupt a line.
+                // Try every possible offset of the remaining stripes; the full
+                // 64-cell grid, not this short segment, validates the rectangle.
+                for(int offset=0;offset<=8-count;offset++){
+                    int start = Math.round(a.start() - offset*cell);
+                    if (start < 0 || start + size > axisLength) continue;
+                    Span match = null;
+                    for (Span old : output) if (Math.abs(old.start - start) <= 2
+                            && Math.abs(old.size - size) <= 4) { match = old; break; }
+                    if (match != null) match.votes+=count-2;
+                    else if (output.size() < 600){Span span=new Span(start,size);span.votes=count-2;output.add(span);}
+                }
             }
         }
     }

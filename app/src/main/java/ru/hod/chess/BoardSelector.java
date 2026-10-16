@@ -61,7 +61,7 @@ final class BoardSelector {
     void close() {
         if (closed) return;
         closed = true;
-        try { windows.removeView(root); } catch (IllegalArgumentException ignored) {}
+        try { windows.removeViewImmediate(root); } catch (IllegalArgumentException ignored) {}
         bitmap.recycle();
     }
 

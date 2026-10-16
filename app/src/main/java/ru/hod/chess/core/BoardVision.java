@@ -7,8 +7,8 @@ import java.io.*;
 public final class BoardVision {
     private static final int N=24;
     public record Region(int left,int top,int size) { public boolean inside(int w,int h){return size>=160&&left>=0&&top>=0&&left+size<=w&&top+size<=h;} }
-    public record Feature(float[] mask,float ink,float occupancy,float[] silhouette) {
-        public Feature(float[] mask,float ink,float occupancy){this(mask,ink,occupancy,canonical(mask));}
+    public record Feature(float[] mask,float ink,float occupancy,float[] silhouette,float[] normalized) {
+        public Feature(float[] mask,float ink,float occupancy){this(mask,ink,occupancy,canonical(mask),normalize(mask));}
     }
     public record Observation(char[] board,float confidence,int uncertain) {}
     private record Template(char piece,Feature feature) {}
@@ -84,11 +84,11 @@ public final class BoardVision {
         // Median of inset corners ignores coordinates and most rounded piece shadows.
         int[] rs=new int[16],gs=new int[16],bs=new int[16];int k=0;
         for(float dy:new float[]{.10f,.18f,.82f,.90f})for(float dx:new float[]{.10f,.18f,.82f,.90f}){int px=pixels[(y0+Math.round(dy*cell))*w+x0+Math.round(dx*cell)];rs[k]=(px>>16)&255;gs[k]=(px>>8)&255;bs[k]=px&255;k++;}
-        Arrays.sort(rs);Arrays.sort(gs);Arrays.sort(bs);int br=rs[8],bg=gs[8],bb=bs[8];float[] mask=new float[N*N];float ink=0,occupied=0;
+        Arrays.sort(rs);Arrays.sort(gs);Arrays.sort(bs);int br=rs[8],bg=gs[8],bb=bs[8];float[] mask=new float[N*N];float ink=0,occupied=0;int foreground=0;
         for(int y=0;y<N;y++)for(int x=0;x<N;x++){
             int xx=x0+Math.round((.12f+(x+.5f)/N*.76f)*cell),yy=y0+Math.round((.08f+(y+.5f)/N*.84f)*cell);int px=pixels[yy*w+xx];int r=(px>>16)&255,g=(px>>8)&255,b=px&255;
-            float dist=(r-br)*(r-br)+(g-bg)*(g-bg)+(b-bb)*(b-bb);float m=Math.max(0f,Math.min(1f,(dist-900f)/2200f));mask[y*N+x]=m;occupied+=m;ink+=m*(.2126f*r+.7152f*g+.0722f*b)/255f;
-        }return new Feature(mask,occupied>0?ink/occupied:0,occupied/(N*N));
+            float dist=(r-br)*(r-br)+(g-bg)*(g-bg)+(b-bb)*(b-bb);float m=Math.max(0f,Math.min(1f,(dist-900f)/2200f));mask[y*N+x]=m;occupied+=m;if(m>.12f)foreground++;ink+=m*(.2126f*r+.7152f*g+.0722f*b)/255f;
+        }return new Feature(mask,occupied>0?ink/occupied:0,foreground/(float)(N*N));
     }
     private static float[] canonical(float[] mask){
         boolean[] expanded=new boolean[N*N],outside=new boolean[N*N];int[] queue=new int[N*N];int head=0,tail=0;
@@ -101,5 +101,9 @@ public final class BoardVision {
         for(int y=1;y<N-1;y++)for(int x=1;x<N-1;x++){boolean filled=true;for(int dy=-1;dy<=1;dy++)for(int dx=-1;dx<=1;dx++)if(outside[(y+dy)*N+x+dx])filled=false;if(filled)result[y*N+x]=1;}
         return result;
     }
-    private static float distance(Feature a,Feature b){float raw=0,shape=0,filled=0;for(int i=0;i<N*N;i++){raw+=Math.abs(a.mask()[i]-b.mask()[i]);shape+=Math.abs(Math.min(1,a.mask()[i]*4)-Math.min(1,b.mask()[i]*4));filled+=Math.abs(a.silhouette()[i]-b.silhouette()[i]);}return Math.min(raw,Math.min(shape,filled))/(N*N)+Math.abs(a.ink()-b.ink())*.22f;}
+    private static float[] normalize(float[] mask){
+        float peak=.12f;for(float value:mask)peak=Math.max(peak,value);
+        float[] result=new float[mask.length];for(int i=0;i<mask.length;i++)result[i]=mask[i]/peak;return result;
+    }
+    private static float distance(Feature a,Feature b){float shape=0,filled=0;for(int i=0;i<N*N;i++){shape+=Math.abs(a.normalized()[i]-b.normalized()[i]);filled+=Math.abs(a.silhouette()[i]-b.silhouette()[i]);}return Math.min(shape,filled)/(N*N)+Math.abs(a.ink()-b.ink())*.22f;}
 }

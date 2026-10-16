@@ -22,6 +22,9 @@ public final class MainActivity extends Activity {
     private AlertDialog analysisDialog;
     private android.content.SharedPreferences prefs;
     private boolean requesting;
+    private static final java.util.concurrent.atomic.AtomicInteger visibleActivities=new java.util.concurrent.atomic.AtomicInteger();
+    private boolean countedVisible;
+    static boolean isVisible(){return visibleActivities.get()>0;}
     @Override public void onCreate(Bundle state){super.onCreate(state);prefs=getSharedPreferences("hod",MODE_PRIVATE);build();if(CaptureService.RESUME_CAPTURE.equals(getIntent().getAction()))getWindow().getDecorView().post(this::startAssistant);}
     private void build(){
         ScrollView scroll=new ScrollView(this);scroll.setFillViewport(true);scroll.setBackgroundColor(Ui.BG);
@@ -46,13 +49,14 @@ public final class MainActivity extends Activity {
         permissions=Ui.text(this,"",12,Ui.MUTED);page.addView(permissions);Ui.gap(page,14);
         page.addView(Ui.button(this,"Разобрать позицию по FEN",false,this::fenDialog),new LinearLayout.LayoutParams(-1,Ui.dp(this,52)));Ui.gap(page,10);
         page.addView(Ui.button(this,"Остановить помощника",false,()->{stopService(new Intent(this,CaptureService.class));Toast.makeText(this,"Помощник остановлен",Toast.LENGTH_SHORT).show();}),new LinearLayout.LayoutParams(-1,Ui.dp(this,48)));Ui.gap(page,24);
-        LinearLayout guide=Ui.card(this);guide.addView(Ui.bold(this,"Первый запуск · без ручной рамки",18,Ui.INK));Ui.gap(guide,12);guide.addView(Ui.text(this,"1. Выбери свой цвет. Разреши окно поверх приложений и захват всего экрана.\n\n2. Открой начальную расстановку в Chess.com. Помощник сам ищет доску и проверяет два кадра.\n\n3. Найденная сетка кратко подсветится. На твоём ходу появится стрелка; на ходе соперника помощник ждёт. При сомнении проверь предложенную рамку и сторону.",14,Ui.MUTED));Ui.gap(guide,14);guide.addView(Ui.text(this,"Если захват прервался: «↻» → разрешить захват. Остановить помощника: «+» → «Остановить помощника». Проверка сетки: «Проверить». Продолжение из середины при потерянной истории: «Позиция». Новая игра: «+» → «Новая партия». Повторить поиск текущей: «+» → «Найти доску». Долгое нажатие этой кнопки открывает ручной запасной режим. При первом запуске с середины партии нужна начальная расстановка.",12,Ui.MUTED));page.addView(guide);Ui.gap(page,14);
+        LinearLayout guide=Ui.card(this);guide.addView(Ui.bold(this,"Первый запуск · без ручной рамки",18,Ui.INK));Ui.gap(guide,12);guide.addView(Ui.text(this,"1. Выбери свой цвет. Разреши окно поверх приложений и захват всего экрана.\n\n2. Открой начальную расстановку в Chess.com. Помощник сам ищет доску и проверяет два кадра.\n\n3. После проверки доски на твоём ходу появится стрелка; на ходе соперника помощник ждёт. При сомнении нажми «Проверить» и проверь рамку и сторону.",14,Ui.MUTED));Ui.gap(guide,14);guide.addView(Ui.text(this,"Если захват прервался: «↻» → разрешить захват. Остановить помощника: «+» → «Остановить помощника». Проверка сетки: «Проверить». Продолжение из середины при потерянной истории: «Позиция». Новая игра: нажми ↻ на начальной доске. Первые один–два полухода распознаются при сохранённой теме. В середине ↻ продолжает текущую игру. Повторный поиск без сброса стартовой расстановки: «+» → «Найти доску». Долгое нажатие этой кнопки открывает ручной запасной режим. При первом запуске с середины партии нужна начальная расстановка.",12,Ui.MUTED));page.addView(guide);Ui.gap(page,14);
         page.addView(Ui.button(this,"Фоновая работа на realme",false,()->new AlertDialog.Builder(this).setTitle("Если realme останавливает ХОД").setMessage("В настройках батареи приложения разреши фоновую работу и при необходимости закрепи ХОД в списке недавних. Названия пунктов зависят от версии realme UI. После остановки захвата окно остаётся: нажми ↻ и снова разреши захват. История партии и тема фигур сохраняются. Android и realme могут завершить процесс; принудительную остановку приложение обойти не может.").setPositiveButton("Настройки приложения",(d,w)->startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,Uri.parse("package:"+getPackageName())))).setNegativeButton("Закрыть",null).show()));Ui.gap(page,16);
-        page.addView(Ui.text(this,"Локальная обработка. Кадры не сохраняются и не отправляются. История ходов и тема фигур сохраняются на телефоне. Root не запрашивается.\n\nВерсия 0.6 · экспериментальная",12,Ui.MUTED));updatePermissions();
+        page.addView(Ui.text(this,"Локальная обработка. Кадры не сохраняются и не отправляются. История ходов и тема фигур сохраняются на телефоне. Root не запрашивается.\n\nВерсия 0.8 · экспериментальная",12,Ui.MUTED));updatePermissions();
     }
     private void updatePermissions(){if(permissions!=null)permissions.setText(Settings.canDrawOverlays(this)?"✓ Окно разрешено · захват подтверждается при запуске":"Нужно разрешение «Поверх других приложений»");}
     @Override protected void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);if(CaptureService.RESUME_CAPTURE.equals(intent.getAction()))startAssistant();}
-    @Override public void onResume(){super.onResume();updatePermissions();}
+    @Override public void onResume(){super.onResume();if(!countedVisible){countedVisible=true;visibleActivities.incrementAndGet();}updatePermissions();}
+    @Override public void onPause(){if(countedVisible){countedVisible=false;visibleActivities.decrementAndGet();}super.onPause();}
     private void startAssistant(){
         if(requesting)return;
         if(CaptureService.running&&CaptureService.capturing){Toast.makeText(this,"Окно уже запущено. Открой Chess.com.",Toast.LENGTH_LONG).show();return;}
@@ -68,7 +72,7 @@ public final class MainActivity extends Activity {
     @Override public void onRequestPermissionsResult(int request,String[] p,int[] result){super.onRequestPermissionsResult(request,p,result);if(request==NOTIFICATIONS)requestCapture();}
     @Override public void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(request==OVERLAY){updatePermissions();if(Settings.canDrawOverlays(this))startAssistant();return;}if(request!=CAPTURE)return;requesting=false;
         if(result!=RESULT_OK||data==null){Toast.makeText(this,"Захват не разрешён",Toast.LENGTH_SHORT).show();return;}
-        Intent service=new Intent(this,CaptureService.class).putExtra("code",result).putExtra("permission",data);startForegroundService(service);
+        Intent service=new Intent(this,CaptureService.class).putExtra("code",result).putExtra("permission",data).putExtra("refresh",CaptureService.RESUME_CAPTURE.equals(getIntent().getAction()));startForegroundService(service);
         getWindow().getDecorView().postDelayed(()->{Intent chess=getPackageManager().getLaunchIntentForPackage("com.chess");if(chess!=null)startActivity(chess);else Toast.makeText(this,"Открой Chess.com и начальную позицию",Toast.LENGTH_LONG).show();},500);
     }
     private void fenDialog(){EditText input=new EditText(this);input.setText(Position.START);input.setTextColor(Ui.INK);input.setTextSize(13);input.setMinLines(3);Ui.pad(input,16);

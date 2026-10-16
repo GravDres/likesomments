@@ -31,6 +31,10 @@ public final class CoreTest {
         AtomicReference<Analysis> result=new AtomicReference<>();new LocalEngine().analyze(Position.fromFen("6k1/5ppp/8/8/8/8/5PPP/3Q2K1 w - - 0 1"),400,result::set);
         check(result.get()!=null&&result.get().bestMove()!=null,"fallback returns move");check(Position.fromFen("6k1/5ppp/8/8/8/8/5PPP/3Q2K1 w - - 0 1").legalMoves().contains(result.get().bestMove()),"engine move legal");
         for(String invalid:new String[]{"8/8/8/8/8/8/8/4K2k w K - 0 1","8/8/8/8/8/8/8/4Kk2 w - - 0 1","P6k/8/8/8/8/8/8/7K w - - 0 1","7k/8/8/8/8/8/8/7K w - - 32768 1","7k/8/8/8/8/8/8/7K w - - 0 50001"}){boolean rejected=false;try{Position.fromFen(invalid);}catch(IllegalArgumentException e){rejected=true;}check(rejected,"reject impossible FEN");}
+        for(String invalid:new String[]{"7k/8/8/8/8/8/8/7K/ w - - 0 1","7k/3p4/8/3pP3/8/8/8/7K w - d6 0 10","7k/8/8/3pP3/8/8/8/7K w - d6 1 10"}){
+            boolean rejected=false;try{Position.fromFen(invalid);}catch(IllegalArgumentException expected){rejected=true;}
+            check(rejected,"reject malformed ranks or en passant inconsistent with the last pawn move");
+        }
         visionTests();
         locatorTests();
         autoSearchTests();
@@ -86,7 +90,8 @@ public final class CoreTest {
         check(repeats.game().repetitionCount()==3&&repeats.game().claimableDraw()!=null,"restart preserves repetition counts, including returns to initial placement");
         check(repeats.game().history().size()==8,"a return to initial arrangement retains every ply");
         AutoBoardSearch search=new AutoBoardSearch();int[] initial=screen(720,1440,40,300,640,false);
-        check(search.inspect(initial,720,1440,vision,game).state()==AutoBoardSearch.State.NEED_NEW_GAME,"automatic calibration never silently discards another game");
+        check(search.inspect(initial,720,1440,vision,game).state()==AutoBoardSearch.State.VERIFYING,"a different starting board begins a new two-frame verification without mutating the old game");
+        check(search.inspect(initial,720,1440,vision,game).calibration().reuseGame()==false&&game.history().size()==1,"confirmed new game is explicit in the result and probing preserves the old history");
         AutoBoardSearch returned=new AutoBoardSearch();returned.inspect(initial,720,1440,vision,repeat);
         check(returned.inspect(initial,720,1440,vision,repeat).calibration().reuseGame(),"legal return to start can be relocated without losing repetition history");
         byte[] broken=bytes.clone();broken[broken.length/2]^=0x42;boolean rejected=false;
