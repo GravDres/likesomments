@@ -33,7 +33,7 @@ public final class AutoBoardSearch {
         }
         if (d.ambiguous()) {
             pending = null;
-            return result(State.UNCERTAIN_GRID, d, null, "Нужна проверка сетки · «Проверить»");
+            return result(State.UNCERTAIN_GRID, d, null, "Сетка неоднозначна · удержи «Автопоиск» для проверки");
         }
         if (pending != null && Objects.equals(pending.source(),source) && BoardLocator.near(pending.calibration().region(), d.region())) {
             Calibration c = pending.calibration();
@@ -69,7 +69,7 @@ public final class AutoBoardSearch {
                     pending=openingMatches.get(0);
                     return result(State.VERIFYING,d,null,"Новая партия · проверяю первые ходы…");
                 }
-                if(openingMatches.size()>1)return result(State.NEED_ORIENTATION,d,null,"Ориентация новой партии неоднозначна · «Проверить»");
+                if(openingMatches.size()>1)return result(State.NEED_ORIENTATION,d,null,"Ориентация новой партии неоднозначна · удержи «Автопоиск»");
             }
             List<Pending> matches = new ArrayList<>();
             if(source!=null)for(Candidate candidate:candidates){
@@ -89,7 +89,7 @@ public final class AutoBoardSearch {
             }
         }
         if(!d.automatic()){
-            return result(State.UNCERTAIN_GRID,d,null,"Проверь сетку · кнопка «Проверить»");
+            return result(State.UNCERTAIN_GRID,d,null,"Нужна проверка сетки · удержи «Автопоиск»");
         }
         if (!d.initialLayout()) {
             if(game!=null&&(!game.history().isEmpty()||!game.initial().fen().equals(Position.START)))return result(State.NEED_HISTORY,d,null,"История не совпала · нажми «Позиция»");

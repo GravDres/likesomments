@@ -91,7 +91,7 @@ public final class CaptureService extends Service {
             public void calibrate(){if(capturing)startAutomaticSearch();else requestCapture();}
             public void manual(){if(capturing)selectBoard();else requestCapture();}
             public void recover(){recoverAssistant();}
-            public void verify(){if(capturing)selectBoard();else requestCapture();}
+            public void verify(){recoverAssistant();}
             public void review(){if(capturing)selectPosition();else requestCapture();}
             public void side(PlayerSide side){changeSide(side);}public void newGame(){startNewGame();}
             public void pause(boolean value){setPaused(value);}
@@ -347,19 +347,21 @@ public final class CaptureService extends Service {
     }
     private synchronized void automaticTimeout(long gen){
         if(destroyed||gen!=epoch.get()||!automaticSearch)return;
-        automaticSearch=false;automaticRetryAt=SystemClock.elapsedRealtime()+5000;long next=epoch.incrementAndGet();AutoAttempt attempt=automaticAttempt;
+        automaticSearch=false;automaticRetryAt=SystemClock.elapsedRealtime()+5000;epoch.incrementAndGet();AutoAttempt attempt=automaticAttempt;
         panel.setCompact(true);
         if(attempt==null)panel.message("Нет кадра экрана · нажми ↻");
         else{
             AutoBoardSearch.State state=attempt.result().state();
             panel.message(switch(state){
                 case NEED_HISTORY -> "История не совпала\nНажми «Позиция», чтобы продолжить";
-                case UNCERTAIN_GRID,NEED_ORIENTATION -> "Нужна проверка сетки\nНажми «Проверить»";
+                case UNCERTAIN_GRID,NEED_ORIENTATION -> "Сетка неоднозначна\nУдержи «Автопоиск»";
                 case NEED_INITIAL -> "Нужна начальная доска\nили подтверждение через «Позиция»";
                 default -> attempt.result().message();
             });
         }
-        if(attempt!=null&&attempt.result().detection()!=null){BoardVision.Region found=attempt.result().detection().region();panel.placeOutside(found,attempt.frame().width(),attempt.frame().height());markBoard(found,next);}
+        if(attempt!=null&&attempt.result().detection()!=null&&attempt.result().detection().automatic()){
+            panel.placeOutside(attempt.result().detection().region(),attempt.frame().width(),attempt.frame().height());
+        }
     }
     private synchronized void markBoard(BoardVision.Region found,long gen){
         if(destroyed||gen!=epoch.get())return;
@@ -380,9 +382,8 @@ public final class CaptureService extends Service {
     }
     private void openReview(Frame snapshot,long gen){
         if(destroyed||gen!=epoch.get()){selecting=false;return;}
-        BoardVision.Region selected=selectionRegion;
-        if(selected==null||!selected.inside(snapshot.width(),snapshot.height())){BoardLocator.Detection found=new BoardLocator().find(snapshot.pixels(),snapshot.width(),snapshot.height());selected=found==null?null:found.region();}
-        if(selected==null){selecting=false;panel.message("Не вижу границы доски · сначала нажми «Проверить»");return;}
+        BoardVision.Region selected=freshRegion(snapshot,selectionRegion);
+        if(selected==null){selecting=false;panel.message("Не вижу границы доски · сначала нажми «Автопоиск»");return;}
         BoardVision.Region chosen=selected;Position reference=tracker==null?Position.start():tracker.position();
         char[] pieces=reference.pieces();
         if(vision!=null)try{pieces=vision.withOrientation(whiteBottom).recognize(snapshot.pixels(),snapshot.width(),snapshot.height(),chosen).board();}catch(RuntimeException ignored){}
@@ -406,7 +407,12 @@ public final class CaptureService extends Service {
         catch(RuntimeException e){selecting=false;panel.message("Не удалось открыть проверку: "+e.getMessage());}
     }
     private void openSelector(Frame snapshot,long gen){
-        openSelector(snapshot,gen,selectionRegion!=null&&selectionRegion.inside(snapshot.width(),snapshot.height())?selectionRegion:null);
+        openSelector(snapshot,gen,freshRegion(snapshot,selectionRegion));
+    }
+    private BoardVision.Region freshRegion(Frame snapshot,BoardVision.Region hint){
+        BoardVision.Region valid=hint!=null&&hint.inside(snapshot.width(),snapshot.height())?hint:null;
+        BoardLocator.Detection found=new BoardLocator().find(snapshot.pixels(),snapshot.width(),snapshot.height(),valid);
+        return found!=null&&!found.ambiguous()?found.region():null;
     }
     private void openSelector(Frame snapshot,long gen,BoardVision.Region initial){
         if(destroyed||gen!=epoch.get()){selecting=false;return;}

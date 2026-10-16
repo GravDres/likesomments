@@ -6,6 +6,7 @@ import android.view.*;
 import android.widget.*;
 import java.util.function.Consumer;
 import ru.hod.chess.core.BoardVision;
+import ru.hod.chess.core.ImageViewport;
 
 /** A prefilled verification screen is used only when automatic selection is uncertain. */
 final class BoardSelector {
@@ -21,6 +22,7 @@ final class BoardSelector {
         windows = context.getSystemService(WindowManager.class);
         bitmap = Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888);
         root = new FrameLayout(context);
+        root.setBackgroundColor(Color.BLACK);
         Selection view = new Selection(context, bitmap, initial);
         root.addView(view, new FrameLayout.LayoutParams(-1, -1));
         LinearLayout instructions = Ui.col(context);
@@ -68,21 +70,25 @@ final class BoardSelector {
     private static final class Selection extends View {
         final Bitmap image;
         final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        final Paint bitmapPaint=new Paint(Paint.ANTI_ALIAS_FLAG|Paint.FILTER_BITMAP_FLAG);
+        final Paint shadePaint=new Paint();
         final BoardVision.Region initial;
         float ax, ay, bx, by;
-        boolean selected;
+        float downX,downY,anchorX,anchorY,oldAx,oldAy,oldBx,oldBy;
+        boolean selected,drawing,wasSelected;
 
         Selection(Context c, Bitmap image, BoardVision.Region initial) {
             super(c); this.image = image; this.initial = initial;
+            bitmapPaint.setAlpha(255);shadePaint.setColor(0x88000000);
             setContentDescription("Проверка найденной шахматной доски");
         }
 
         @Override protected void onSizeChanged(int w, int h, int oldw, int oldh) {
-            if (!selected && initial != null) {
-                ax = initial.left() * (float) w / image.getWidth();
-                ay = initial.top() * (float) h / image.getHeight();
-                bx = ax + initial.size() * (float) w / image.getWidth();
-                by = ay + initial.size() * (float) h / image.getHeight();
+            if (!selected && initial != null && initial.inside(image.getWidth(),image.getHeight())) {
+                // Keep the selection in screenshot coordinates. Drawing and
+                // touch input use the same uniform mapping, even with nav insets.
+                ax = initial.left(); ay = initial.top();
+                bx = ax + initial.size(); by = ay + initial.size();
                 selected = true;
             }
         }
@@ -96,18 +102,27 @@ final class BoardSelector {
         BoardVision.Region region() {
             if (!selected) return null;
             RectF r = selection();
-            float sx = (float) image.getWidth() / getWidth(), sy = (float) image.getHeight() / getHeight();
-            if (Math.abs(sx / sy - 1) > .03) return null;
-            BoardVision.Region region = new BoardVision.Region(Math.round(r.left * sx),
-                    Math.round(r.top * sy), Math.round(r.width() * sx));
+            BoardVision.Region region = new BoardVision.Region(Math.round(r.left),
+                    Math.round(r.top), Math.round(r.width()));
             return region.inside(image.getWidth(), image.getHeight()) ? region : null;
         }
 
         @Override public boolean onTouchEvent(MotionEvent e) {
-            float x = Math.max(0, Math.min(getWidth() - 1, e.getX())), y = Math.max(0, Math.min(getHeight() - 1, e.getY()));
+            if(getWidth()<=0||getHeight()<=0)return false;
+            ImageViewport viewport=viewport();ImageViewport.Point point=viewport.toSource(e.getX(),e.getY());
+            float x=point.x(),y=point.y();
             switch (e.getActionMasked()) {
-                case MotionEvent.ACTION_DOWN: ax = bx = x; ay = by = y; selected = true; break;
-                case MotionEvent.ACTION_MOVE: case MotionEvent.ACTION_UP: bx = x; by = y; break;
+                case MotionEvent.ACTION_DOWN:
+                    if(!viewport.contains(e.getX(),e.getY()))return false;
+                    downX=e.getX();downY=e.getY();anchorX=x;anchorY=y;drawing=false;
+                    oldAx=ax;oldAy=ay;oldBx=bx;oldBy=by;wasSelected=selected;break;
+                case MotionEvent.ACTION_MOVE: case MotionEvent.ACTION_UP:
+                    if(!drawing&&Math.hypot(e.getX()-downX,e.getY()-downY)>ViewConfiguration.get(getContext()).getScaledTouchSlop()){
+                        drawing=true;selected=true;ax=anchorX;ay=anchorY;
+                    }
+                    if(drawing){bx=x;by=y;}break;
+                case MotionEvent.ACTION_CANCEL:
+                    ax=oldAx;ay=oldAy;bx=oldBx;by=oldBy;selected=wasSelected;drawing=false;break;
                 default: return true;
             }
             invalidate(); if (e.getActionMasked() == MotionEvent.ACTION_UP) performClick(); return true;
@@ -116,12 +131,15 @@ final class BoardSelector {
         @Override public boolean performClick() { super.performClick(); return true; }
 
         @Override protected void onDraw(Canvas canvas) {
-            canvas.drawBitmap(image, null, new RectF(0, 0, getWidth(), getHeight()), paint);
-            paint.setColor(0x88000000); canvas.drawRect(0, 0, getWidth(), getHeight(), paint);
+            canvas.drawColor(Color.BLACK);
+            if(image.isRecycled()||getWidth()<=0||getHeight()<=0)return;
+            ImageViewport viewport=viewport();RectF imageRect=rect(viewport.image());
+            canvas.drawBitmap(image, null, imageRect, bitmapPaint);
+            canvas.drawRect(imageRect, shadePaint);
             if (!selected) return;
-            RectF r = selection();
+            RectF source=selection();RectF r=rect(viewport.toView(source.left,source.top,source.width(),source.height()));
             canvas.save(); canvas.clipRect(r);
-            canvas.drawBitmap(image, null, new RectF(0, 0, getWidth(), getHeight()), paint); canvas.restore();
+            canvas.drawBitmap(image, null, imageRect, bitmapPaint); canvas.restore();
             paint.setColor(Ui.ACCENT); paint.setStrokeWidth(Ui.dp(getContext(), 2)); paint.setStyle(Paint.Style.STROKE); canvas.drawRect(r, paint);
             paint.setStrokeWidth(Ui.dp(getContext(), 1)); paint.setColor(0x99c2ef97);
             for (int i = 1; i < 8; i++) {
@@ -130,5 +148,7 @@ final class BoardSelector {
             }
             paint.setStyle(Paint.Style.FILL);
         }
+        private ImageViewport viewport(){return new ImageViewport(image.getWidth(),image.getHeight(),getWidth(),getHeight());}
+        private static RectF rect(ImageViewport.Rect r){return new RectF(r.left(),r.top(),r.right(),r.bottom());}
     }
 }

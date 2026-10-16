@@ -41,8 +41,14 @@ public final class BoardLocator {
                 .thenComparing(Comparator.comparingInt((Span s) -> s.size).reversed()));
         List<Scored> candidates = new ArrayList<>();
         if(hint!=null&&hint.inside(width,height)){
-            float score=gridScore(pixels,width,hint);
-            if(score>=.90f)candidates.add(new Scored(hint,score));
+            // A previous detector can be off by one whole rank/file. Recheck
+            // neighboring interpretations even when stripes are interrupted.
+            for(int dy:new int[]{0,-1,1})for(int dx:new int[]{0,-1,1}){
+                BoardVision.Region nearby=new BoardVision.Region(hint.left()+Math.round(dx*hint.size()/8f),hint.top()+Math.round(dy*hint.size()/8f),hint.size());
+                if(!nearby.inside(width,height))continue;
+                float score=gridScore(pixels,width,nearby);
+                if(score>=.90f)candidates.add(new Scored(nearby,score));
+            }
         }
         for (Span xs : horizontal.subList(0, Math.min(48, horizontal.size()))) {
             List<Span> vertical = new ArrayList<>();
@@ -209,19 +215,24 @@ public final class BoardLocator {
         int[] colors = {medianColor(samples[0]), medianColor(samples[1])};
         if (distance(colors[0], colors[1]) < 35 * 35) return 0;
         int normal = 0, highlighted = 0;
+        int[] ranks=new int[8],files=new int[8];
         for (int parity = 0; parity < 2; parity++) for (int i = 0; i < 128; i += 4) {
             int matches = 0;
             int[] corners = Arrays.copyOfRange(samples[parity], i, i + 4);
             for (int color : corners) if (distance(color, colors[parity]) <= 42 * 42) matches++;
             // Coordinates/shadows may cover one corner. A highlighted last-move
             // square is uniformly recolored; it does not invalidate the 8x8 grid.
-            if (matches >= 3) normal++;
+            if (matches >= 3){normal++;int tile=i/4,row=tile/4,col=(tile%4)*2+((row+parity)&1);ranks[row]++;files[col]++;}
             else {
                 int median = medianColor(corners), uniform = 0;
                 for (int color : corners) if (distance(color, median) <= 42 * 42) uniform++;
                 if (uniform >= 3) highlighted++;
             }
         }
+        // A uniform chat bubble can match half a rank and look like four
+        // highlighted squares in the other half. Require checkerboard evidence
+        // in every rank/file, rather than allowing one complete edge to vanish.
+        for(int i=0;i<8;i++)if(ranks[i]<5||files[i]<5)return 0;
         return (normal + (highlighted <= 4 ? highlighted : 0)) / 64f;
     }
 
