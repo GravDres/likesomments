@@ -12,7 +12,7 @@
         </activity>
         <service android:name=".CaptureService" android:exported="false" android:foregroundServiceType="mediaProjection|specialUse">
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="User-started persistent floating chess assistant controls. Keep controls and local game history available when screen capture ends; capture restarts only after fresh system consent." />
+                android:value="User-started floating chess assistant controls and local analysis. Optional root capture runs only after user selection and su-manager authorization; ordinary capture requires MediaProjection consent." />
         </service>
     </application>
 </manifest>

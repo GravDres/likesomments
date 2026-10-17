@@ -19,13 +19,15 @@ import java.util.concurrent.atomic.*;
 import ru.hod.chess.core.*;
 
 public final class CaptureService extends Service {
-    public static volatile boolean running,capturing;
+    public static volatile boolean running,capturing,rootMode,rootStarting;
+    public static final String START_ROOT="ru.hod.chess.START_ROOT";
     public static final String RESUME_CAPTURE="ru.hod.chess.RESUME_CAPTURE";
     private static final String STOP="ru.hod.chess.STOP";
     public static final String SIDE_CHANGED="ru.hod.chess.SIDE_CHANGED";
     private final Handler main=new Handler(Looper.getMainLooper());
     private HandlerThread captureThread;private Handler capture;
     private volatile MediaProjection projection;private volatile VirtualDisplay display;private volatile ImageReader reader;
+    private volatile RootCaptureSession rootCapture;private volatile boolean rootSecureSeen;
     private final ExecutorService visionQueue=Executors.newSingleThreadExecutor(),engineQueue=Executors.newSingleThreadExecutor();
     private final AtomicBoolean processing=new AtomicBoolean();private final AtomicLong epoch=new AtomicLong(),searchEpoch=new AtomicLong();
     private final AtomicBoolean arrowActive=new AtomicBoolean();
@@ -63,7 +65,9 @@ public final class CaptureService extends Service {
         try{
             if(!initialized){initialize();if(intent==null)captureProblem="Окно восстановлено после остановки · нажми ↻ для захвата";}
             if(intent!=null&&SIDE_CHANGED.equals(intent.getAction()))changeSide(prefs().getBoolean("playerWhite",true)?PlayerSide.WHITE:PlayerSide.BLACK);
-            if(intent!=null&&intent.hasExtra("permission"))startCapture(intent);
+            if(intent!=null&&START_ROOT.equals(intent.getAction()))startRootCapture(intent.getBooleanExtra("refresh",false));
+            else if(intent==null&&prefs().getBoolean("rootCapture",false))startRootCapture(false);
+            else if(intent!=null&&intent.hasExtra("permission"))startCapture(intent);
             else if(!capturing){panel.message(captureProblem);panel.health("Захват остановлен · ↻ продолжить");}
         }catch(Exception e){
             if(panel!=null)captureLost("Не удалось подключить экран: "+e.getMessage());
@@ -77,7 +81,7 @@ public final class CaptureService extends Service {
         PendingIntent open=PendingIntent.getActivity(this,0,new Intent(this,MainActivity.class).setAction(RESUME_CAPTURE),PendingIntent.FLAG_IMMUTABLE|PendingIntent.FLAG_UPDATE_CURRENT);
         PendingIntent stop=PendingIntent.getService(this,1,new Intent(this,CaptureService.class).setAction(STOP),PendingIntent.FLAG_IMMUTABLE|PendingIntent.FLAG_UPDATE_CURRENT);
         Notification notification=new Notification.Builder(this,"capture").setSmallIcon(ru.hod.chess.R.drawable.ic_hod)
-            .setContentTitle("ХОД · окно активно").setContentText(screen?"Экран подключён · анализ на устройстве":"Захват остановлен · нажми, чтобы продолжить")
+            .setContentTitle("ХОД · окно активно").setContentText(rootMode?(rootStarting?"Ожидаю разрешение root":"Root-захват · анализ на устройстве"):screen?"Экран подключён · анализ на устройстве":"Захват остановлен · нажми, чтобы продолжить")
             .setContentIntent(open).setOngoing(true).addAction(new Notification.Action.Builder(null,"Остановить",stop).build()).build();
         int type=screen?ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION:0;
         if(Build.VERSION.SDK_INT>=34)type|=ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE;
@@ -102,7 +106,7 @@ public final class CaptureService extends Service {
         initialized=true;running=true;main.postDelayed(healthCheck,1000);main.post(framePulse);
     }
     private void startCapture(Intent intent){
-        if(capturing)releaseCapture();foreground(true);
+        releaseCapture();foreground(true);
         Intent permission=Build.VERSION.SDK_INT>=33?intent.getParcelableExtra("permission",Intent.class):intent.getParcelableExtra("permission");
         MediaProjection next=getSystemService(MediaProjectionManager.class).getMediaProjection(intent.getIntExtra("code",Activity.RESULT_CANCELED),permission);
         if(next==null)throw new IllegalStateException("Захват не разрешён");
@@ -113,14 +117,50 @@ public final class CaptureService extends Service {
         },capture);
         DisplayMetrics metrics=new DisplayMetrics();getSystemService(WindowManager.class).getDefaultDisplay().getRealMetrics(metrics);width=metrics.widthPixels;height=metrics.heightPixels;
         reader=createReader(width,height);display=next.createVirtualDisplay("ХОД — локальный анализ",width,height,getResources().getConfiguration().densityDpi,DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,reader.getSurface(),null,capture);
-        capturing=true;paused=false;panel.setPaused(false);region=null;confirmed=null;boardVerified=false;lastImageAt=SystemClock.elapsedRealtime();lastGoodAt=lastImageAt;lastFrame=0;readerRepairs=frameErrors=0;cleanFrames.reset();
-        panel.message("Экран подключён · ищу доску");warmEngine();
-        boolean refresh=intent.getBooleanExtra("refresh",false);
+        captureConnected(generation,intent.getBooleanExtra("refresh",false));
+    }
+    private void captureConnected(int generation,boolean refresh){
+        capturing=true;rootStarting=false;paused=false;panel.setPaused(false);region=null;confirmed=null;boardVerified=false;lastImageAt=SystemClock.elapsedRealtime();lastGoodAt=lastImageAt;lastFrame=0;readerRepairs=frameErrors=0;cleanFrames.reset();
+        prefs().edit().remove("lastCaptureProblem").apply();
+        panel.message(rootMode?"Root подключён · открой Chess.com":"Экран подключён · ищу доску");warmEngine();
         main.postDelayed(()->{if(!destroyed&&capturing&&generation==captureGeneration)startAutomaticSearch(refresh);},350);
+    }
+    private void startRootCapture(boolean refresh){
+        if(Build.VERSION.SDK_INT<34){captureLost("Root-захват требует Android 14 или новее");return;}
+        releaseCapture();rootMode=true;rootStarting=true;rootSecureSeen=false;foreground(false);
+        panel.message("Разреши Root для ХОД в менеджере root");panel.health("Root · ожидаю разрешение");
+        DisplayMetrics metrics=new DisplayMetrics();getSystemService(WindowManager.class).getDefaultDisplay().getRealMetrics(metrics);width=metrics.widthPixels;height=metrics.heightPixels;
+        int generation=++captureGeneration;
+        RootCaptureSession session=new RootCaptureSession(getApplicationInfo().sourceDir,new RootCaptureSession.Listener(){
+            public void ready(int sdk){main.post(()->{if(!destroyed&&generation==captureGeneration){captureConnected(generation,refresh);foreground(false);}});}
+            public RootCaptureSession.Request request(){
+                long now=SystemClock.elapsedRealtime(),version=cleanFrames.version();
+                if(destroyed||generation!=captureGeneration||!capturing||!wantFrame(now,true))return new RootCaptureSession.Request(RootCaptureWire.Request.idleRequest(),epoch.get(),version);
+                BoardVision.Region crop=region;boolean cropped=!automaticSearch&&!preparingSelection&&crop!=null&&crop.inside(width,height);
+                return new RootCaptureSession.Request(new RootCaptureWire.Request(width,height,cropped?crop.left():0,cropped?crop.top():0,cropped?crop.size():0,false),epoch.get(),version);
+            }
+            public void heartbeat(){if(generation==captureGeneration)lastImageAt=SystemClock.elapsedRealtime();}
+            public void frame(RootCaptureWire.Frame f,RootCaptureSession.Request request){
+                if(destroyed||generation!=captureGeneration||!capturing)return;
+                long now=SystemClock.elapsedRealtime();lastImageAt=now;
+                if(f.screenWidth()!=width||f.screenHeight()!=height){main.post(()->{if(!destroyed&&generation==captureGeneration)rootResized(f.screenWidth(),f.screenHeight());});return;}
+                rootSecureSeen=(f.flags()&RootCaptureWire.SECURE_LAYERS)!=0;
+                if(request.epoch()!=epoch.get()||request.cleanVersion()!=cleanFrames.version()||paused||selecting||MainActivity.isVisible())return;
+                acceptFrame(new Frame(f.pixels(),f.width(),f.height(),f.left(),f.top()),f.screenWidth(),f.screenHeight(),request.cleanVersion(),now);
+            }
+            public void failed(String reason){main.post(()->{if(!destroyed&&generation==captureGeneration)captureLost(reason);});}
+        });
+        rootCapture=session;session.start();
+    }
+    private void rootResized(int w,int h){
+        if(!rootMode||!capturing||w<1||h<1||(w==width&&h==height))return;
+        boolean refresh=automaticSearch&&automaticRefresh;epoch.incrementAndGet();invalidateSearch();width=w;height=h;region=null;rememberedRegion=null;latest=null;boardVerified=false;stability.clear();cleanFrames.reset();automaticSearch=false;preparingSelection=false;selecting=false;
+        if(selector!=null){selector.close();selector=null;}if(review!=null){review.close();review=null;}
+        panel.message("Размер Root-кадра изменился · ищу доску");if(!paused)startAutomaticSearch(refresh);
     }
     private void warmEngine(){int generation=captureGeneration;engineQueue.submit(()->{try{if(engine!=null||destroyed||!capturing||generation!=captureGeneration)return;ChessEngine ready=EngineFactory.create(this,engineThreads());if(destroyed||!capturing||generation!=captureGeneration)ready.close();else engine=ready;}catch(Exception e){main.post(()->{if(!destroyed&&generation==captureGeneration)panel.message("Stockfish не запустился: "+e.getMessage());});}});}
     private synchronized void releaseCapture(){
-        capturing=false;automaticRetryAt=0;++captureGeneration;epoch.incrementAndGet();automaticSearch=false;selecting=false;preparingSelection=false;boardVerified=false;region=null;confirmed=null;stability.clear();invalidateSearch();
+        capturing=false;rootStarting=false;rootMode=false;RootCaptureSession oldRoot=rootCapture;rootCapture=null;if(oldRoot!=null)oldRoot.close();automaticRetryAt=0;++captureGeneration;epoch.incrementAndGet();automaticSearch=false;selecting=false;preparingSelection=false;boardVerified=false;region=null;confirmed=null;stability.clear();invalidateSearch();
         if(selector!=null){selector.close();selector=null;}if(review!=null){review.close();review=null;}
         VirtualDisplay oldDisplay=display;ImageReader oldReader=reader;MediaProjection oldProjection=projection;display=null;reader=null;projection=null;latest=null;cleanFrames.reset();
         if(capture!=null)capture.post(()->{try{if(oldDisplay!=null)oldDisplay.release();}catch(RuntimeException ignored){}try{if(oldReader!=null)oldReader.close();}catch(RuntimeException ignored){}try{if(oldProjection!=null)oldProjection.stop();}catch(RuntimeException ignored){}});
@@ -129,7 +169,7 @@ public final class CaptureService extends Service {
     private synchronized void captureLost(String reason){
         if(destroyed)return;releaseCapture();captureProblem=reason;prefs().edit().putString("lastCaptureProblem",reason).apply();foreground(false);panel.ensureAttached();panel.message(reason);panel.health("Захват остановлен · ↻ продолжить");
     }
-    private void requestCapture(){startActivity(new Intent(this,MainActivity.class).setAction(RESUME_CAPTURE).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_SINGLE_TOP));}
+    private void requestCapture(){if(rootStarting)return;if(prefs().getBoolean("rootCapture",false)){startRootCapture(true);return;}startActivity(new Intent(this,MainActivity.class).setAction(RESUME_CAPTURE).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_SINGLE_TOP));}
     private synchronized void recoverAssistant(){
         if(destroyed)return;if(!capturing){requestCapture();return;}
         if(paused){paused=false;panel.setPaused(false);}automaticSearch=false;selecting=false;preparingSelection=false;if(selector!=null){selector.close();selector=null;}if(review!=null){review.close();review=null;}
@@ -147,16 +187,17 @@ public final class CaptureService extends Service {
         try{
             panel.ensureAttached();long now=SystemClock.elapsedRealtime();
             if(capturing){
-                long age=now-lastImageAt;panel.health(paused?"Пауза · окно активно":age>4000?"Жду кадр экрана · ↻ повторить":"Экран подключён · ↻ восстановить");
+                long age=now-lastImageAt;panel.health(paused?"Пауза · окно активно":age>4000?"Жду кадр экрана · ↻ повторить":rootMode?(rootSecureSeen?"Root · защищённый кадр получен":"Root · кадры поступают · ↻"):"Экран подключён · ↻ восстановить");
                 if(!paused&&!selecting&&!preparingSelection&&age>8000&&now-lastReaderRepair>12000){
-                    if(readerRepairs++<2){lastReaderRepair=now;repairReader();}
+                    if(rootMode)captureLost("Root перестал передавать кадры · нажми ↻");
+                    else if(readerRepairs++<2){lastReaderRepair=now;repairReader();}
                     else captureLost("Кадры экрана не поступают · нажми ↻ для нового захвата");
                 }
                 if(!paused&&region==null&&!automaticSearch&&!selecting&&!preparingSelection&&automaticRetryAt>0&&now>=automaticRetryAt)startAutomaticSearch(automaticRefresh);
                 if(!paused&&engineStartedAt>0&&!analysisComplete&&now-engineStartedAt>15000){
                     engineStartedAt=0;ChessEngine stalled=engine;engine=null;invalidateSearch();if(stalled!=null)stalled.close();panel.message("Перезапускаю расчёт · история сохранена");
                 }
-            }else panel.health("Захват остановлен · ↻ продолжить");
+            }else panel.health(rootStarting?"Root · ожидаю разрешение":"Захват остановлен · ↻ продолжить");
         }catch(RuntimeException e){if(!destroyed){captureProblem="Проверь разрешение плавающего окна";}}
         if(!destroyed)main.postDelayed(this,1000);
     }};
@@ -173,10 +214,8 @@ public final class CaptureService extends Service {
     private void onImage(ImageReader source){
         if(destroyed)return;
         try(Image image=source.acquireLatestImage()){
-            if(image==null||source!=reader)return;lastImageAt=SystemClock.elapsedRealtime();readerRepairs=0;if(selecting||paused||!capturing)return;
-            if(MainActivity.isVisible()){boardVerified=false;stability.clear();hideArrow();return;}
-            long now=SystemClock.elapsedRealtime();int interval=automaticSearch?250:160;if(now-lastFrame<interval)return;lastFrame=now;
-            long cleanVersion=cleanFrames.version();if(guide==null&&!cleanFrame())return;
+            if(image==null||source!=reader)return;lastImageAt=SystemClock.elapsedRealtime();readerRepairs=0;
+            long now=SystemClock.elapsedRealtime(),cleanVersion=cleanFrames.version();if(!wantFrame(now,false))return;
             Image.Plane plane=image.getPlanes()[0];int stride=plane.getRowStride()/plane.getPixelStride();if(plane.getPixelStride()!=4)return;
             int imageWidth=image.getWidth(),imageHeight=image.getHeight();BoardVision.Region crop=region;
             boolean cropped=!automaticSearch&&!preparingSelection&&crop!=null&&crop.inside(imageWidth,imageHeight);
@@ -185,30 +224,40 @@ public final class CaptureService extends Service {
             // Outside calibration, copy and convert the board only, not the whole display.
             for(int row=0;row<h;row++){rgba.position((top+row)*stride+left);rgba.get(pixels,row*w,w);}
             for(int i=0;i<pixels.length;i++){int px=pixels[i];pixels[i]=(px&0xff00ff00)|((px>>>16)&255)|((px&255)<<16);}
-            Frame f=new Frame(pixels,w,h,left,top);latest=f;
-            // Visibility may change during the pixel copy; recheck the clean-frame
-            // boundary before calibration or recognition can consume this image.
-            if(guide==null&&(arrowActive.get()||cleanVersion!=cleanFrames.version()))return;
-            if(automaticSearch){if(now>=automaticAfter&&processing.compareAndSet(false,true)){long gen=epoch.get();AutoBoardSearch finder=automaticFinder;visionQueue.execute(()->{try{probeAutomatic(f,finder,gen);}catch(Exception e){Log.e("HodCapture","Board search failed",e);main.post(()->{if(gen==epoch.get()&&!destroyed){automaticSearch=false;automaticRetryAt=SystemClock.elapsedRealtime()+5000;panel.setCompact(true);panel.message("Сбой распознавания: "+errorText(e)+" · повторю поиск");}});}finally{processing.set(false);}});}return;}
-            if(preparingSelection){if(now>=selectAfter){preparingSelection=false;selecting=true;long gen=epoch.get();boolean position=reviewRequested;main.post(()->{if(position)openReview(f,gen);else openSelector(f,gen);});}return;}
-            if(paused||region==null)return;
-            BoardVision.Region selected=region;long gen=epoch.get();
-            if(panel!=null&&panel.overlaps(selected)){boardVerified=false;stability.clear();hideArrow();if(now-lastPanelMoveAt>800){lastPanelMoveAt=now;main.post(()->{if(panel!=null&&gen==epoch.get()&&!destroyed){panel.placeOutside(selected,imageWidth,imageHeight);panel.message("Перемещаю окно за пределы доски");}});}return;}
-            Guide shown=guide;
-            if(shown!=null){
-                // A screenshot containing our arrow is used ONLY for motion screening.
-                // Recognition always waits for an image captured after the arrow was hidden.
-                if(!prefs().getBoolean("arrows",true)){hideArrow();return;}
-                ArrowGeometry localShape=new ArrowGeometry(f.local(shown.shape().region),shown.shape().move,whiteBottom);
-                if(!f.sameArea(shown.clean())||BoardChangeDetector.changed(shown.clean().pixels(),pixels,w,h,localShape)){
-                    boardVerified=false;stability.clear();hideArrow();main.post(()->{if(panel!=null)panel.message("Позиция меняется · проверяю ход…");});
-                }
-                return;
-            }
-            if(!processing.compareAndSet(false,true))return;
-            visionQueue.execute(()->{try{if(gen==epoch.get()&&!destroyed&&!paused)process(f,selected,gen);}catch(Exception e){Log.e("HodCapture","Board frame failed",e);recordBoardFailure(gen);main.post(()->{if(panel!=null&&gen==epoch.get()&&!destroyed)panel.message("Ошибка чтения доски: "+errorText(e)+" · повторю поиск");});}finally{processing.set(false);}});
+            acceptFrame(new Frame(pixels,w,h,left,top),imageWidth,imageHeight,cleanVersion,now);
         }catch(IllegalStateException e){if(source==reader&&capturing&&++frameErrors>=3)main.post(()->{if(!destroyed&&capturing&&source==reader)repairReader();});}
         catch(RuntimeException e){if(!destroyed&&source==reader)main.post(()->{if(destroyed||!capturing||source!=reader)return;if(++frameErrors>=3)captureLost("Ошибка чтения экрана · нажми ↻ для продолжения");else repairReader();});}
+    }
+    private boolean wantFrame(long now,boolean fresh){
+        if(destroyed||selecting||paused||!capturing)return false;
+        if(MainActivity.isVisible()){boardVerified=false;stability.clear();hideArrow();return false;}
+        int interval=automaticSearch?250:160;if(now-lastFrame<interval)return false;lastFrame=now;
+        return guide!=null||(fresh?cleanFrames.acceptFreshCapture(System.nanoTime()):cleanFrame());
+    }
+    private void acceptFrame(Frame f,int imageWidth,int imageHeight,long cleanVersion,long now){
+        if(destroyed||paused||selecting||!capturing||MainActivity.isVisible())return;
+        latest=f;
+        // Visibility may change during the pixel copy; recheck the clean-frame
+        // boundary before calibration or recognition can consume this image.
+        if(guide==null&&(arrowActive.get()||cleanVersion!=cleanFrames.version()))return;
+        if(automaticSearch){if(now>=automaticAfter&&processing.compareAndSet(false,true)){long gen=epoch.get();AutoBoardSearch finder=automaticFinder;visionQueue.execute(()->{try{probeAutomatic(f,finder,gen);}catch(Exception e){Log.e("HodCapture","Board search failed",e);main.post(()->{if(gen==epoch.get()&&!destroyed){automaticSearch=false;automaticRetryAt=SystemClock.elapsedRealtime()+5000;panel.setCompact(true);panel.message("Сбой распознавания: "+errorText(e)+" · повторю поиск");}});}finally{processing.set(false);}});}return;}
+        if(preparingSelection){if(now>=selectAfter){preparingSelection=false;selecting=true;long gen=epoch.get();boolean position=reviewRequested;main.post(()->{if(position)openReview(f,gen);else openSelector(f,gen);});}return;}
+        if(paused||region==null)return;
+        BoardVision.Region selected=region;long gen=epoch.get();
+        if(panel!=null&&panel.overlaps(selected)){boardVerified=false;stability.clear();hideArrow();if(now-lastPanelMoveAt>800){lastPanelMoveAt=now;main.post(()->{if(panel!=null&&gen==epoch.get()&&!destroyed){panel.placeOutside(selected,imageWidth,imageHeight);panel.message("Перемещаю окно за пределы доски");}});}return;}
+        Guide shown=guide;
+        if(shown!=null){
+            // A screenshot containing our arrow is used ONLY for motion screening.
+            // Recognition always waits for an image captured after the arrow was hidden.
+            if(!prefs().getBoolean("arrows",true)){hideArrow();return;}
+            ArrowGeometry localShape=new ArrowGeometry(f.local(shown.shape().region),shown.shape().move,whiteBottom);
+            if(!f.sameArea(shown.clean())||BoardChangeDetector.changed(shown.clean().pixels(),f.pixels(),f.width(),f.height(),localShape)){
+                boardVerified=false;stability.clear();hideArrow();main.post(()->{if(panel!=null)panel.message("Позиция меняется · проверяю ход…");});
+            }
+            return;
+        }
+        if(!processing.compareAndSet(false,true))return;
+        visionQueue.execute(()->{try{if(gen==epoch.get()&&!destroyed&&!paused)process(f,selected,gen);}catch(Exception e){Log.e("HodCapture","Board frame failed",e);recordBoardFailure(gen);main.post(()->{if(panel!=null&&gen==epoch.get()&&!destroyed)panel.message("Ошибка чтения доски: "+errorText(e)+" · повторю поиск");});}finally{processing.set(false);}});
     }
     private void process(Frame f,BoardVision.Region selected,long gen){
         BoardVision model=vision;GameTracker game=tracker;if(model==null||game==null)return;
@@ -436,7 +485,7 @@ public final class CaptureService extends Service {
     private synchronized void setPaused(boolean value){paused=value;boardVerified=false;stability.clear();invalidateSearch();if(value){automaticSearch=false;preparingSelection=false;selecting=false;if(selector!=null){selector.close();selector=null;}if(review!=null){review.close();review=null;}epoch.incrementAndGet();panel.message("На паузе · захват не обрабатывается");}else{epoch.incrementAndGet();panel.message("Продолжаю · жду стабильную позицию");if(region==null)startAutomaticSearch();}}
     private android.content.SharedPreferences prefs(){return getSharedPreferences("hod",MODE_PRIVATE);}
     @Override public synchronized void onDestroy(){
-        destroyed=true;running=false;capturing=false;automaticSearch=false;main.removeCallbacks(healthCheck);main.removeCallbacks(framePulse);epoch.incrementAndGet();invalidateSearch();if(selector!=null)selector.close();if(review!=null)review.close();if(panel!=null)panel.close();if(arrows!=null)arrows.close();confirmed=null;
+        destroyed=true;running=false;capturing=false;rootMode=false;rootStarting=false;RootCaptureSession oldRoot=rootCapture;rootCapture=null;if(oldRoot!=null)oldRoot.close();automaticSearch=false;main.removeCallbacks(healthCheck);main.removeCallbacks(framePulse);epoch.incrementAndGet();invalidateSearch();if(selector!=null)selector.close();if(review!=null)review.close();if(panel!=null)panel.close();if(arrows!=null)arrows.close();confirmed=null;
         visionQueue.shutdownNow();engineQueue.shutdownNow();ChessEngine e=engine;if(e!=null)e.close();
         // Release capture resources on their owning thread, after any in-flight image callback.
         if(capture!=null)capture.post(()->{if(display!=null)display.release();if(reader!=null)reader.close();latest=null;if(projection!=null)projection.stop();captureThread.quitSafely();});
