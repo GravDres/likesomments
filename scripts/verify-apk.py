@@ -29,6 +29,7 @@ with zipfile.ZipFile(apk) as archive:
         assert len(archive.read(name)) > 20, f'Missing attribution: {name}'
     assert 'AndroidManifest.xml' in archive.namelist()
     dex = [archive.read(name) for name in archive.namelist() if name.startswith('classes') and name.endswith('.dex')]
-    for entry in (b'Lru/hod/chess/RootCaptureMain;', b'Lru/hod/chess/core/RootCaptureWire;'):
-        assert any(entry in data for data in dex), f'Missing root capture entry point: {entry}'
-print(f'PASS: {apk.name}, ARM64 engine + NNUE ({len(binary):,} bytes), 16 KiB ELF alignment, licenses, root entry point')
+    for entry in (b'Lru/hod/chess/RootCaptureMain;', b'Lru/hod/chess/core/RootCaptureWire;', b'Lru/hod/chess/core/ChessPlatform;'):
+        assert any(entry in data for data in dex), f'Missing application entry point: {entry}'
+    assert any(b'org.lichess.mobileV2' in data for data in dex), 'Official Lichess app package missing'
+print(f'PASS: {apk.name}, ARM64 engine + NNUE ({len(binary):,} bytes), 16 KiB ELF alignment, licenses, root capture and Lichess')

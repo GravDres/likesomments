@@ -4,7 +4,11 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <queries><package android:name="com.chess" /></queries>
+    <queries>
+        <package android:name="com.chess" />
+        <package android:name="org.lichess.mobileV2" />
+        <package android:name="org.lichess.mobileapp" />
+    </queries>
     <application android:theme="@style/AppTheme" android:label="ХОД" android:icon="@drawable/ic_hod"
         android:allowBackup="false" android:supportsRtl="true" android:extractNativeLibs="true">
         <activity android:name=".MainActivity" android:exported="true" android:resizeableActivity="true">

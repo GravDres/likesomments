@@ -100,9 +100,13 @@ public final class CoreTest {
         Position baseline=Position.fromDiagram(pair.pieces(),true,15,-1,0,17);GameTracker rebased=new GameTracker(baseline);rebased.accept(baseline.play(Move.parse("g1f3")).pieces());
         GameMemory.Restored midgame=GameMemory.decode(GameMemory.encode(rebased,vision));
         check(midgame.game().initial().fen().equals(baseline.fen())&&midgame.game().history().size()==1&&midgame.game().position().fullmove==17,"manual recovery stores its own baseline and subsequent history without pretending to start at move one");
-        byte[] modern=GameMemory.encode(game,vision);java.io.DataInputStream oldInput=new java.io.DataInputStream(new java.util.zip.GZIPInputStream(new java.io.ByteArrayInputStream(modern)));oldInput.readInt();oldInput.readUTF();byte[] payload=oldInput.readAllBytes();oldInput.close();
-        java.io.ByteArrayOutputStream legacyBytes=new java.io.ByteArrayOutputStream();try(java.io.DataOutputStream output=new java.io.DataOutputStream(new java.util.zip.GZIPOutputStream(legacyBytes))){output.writeInt(0x484f4404);output.write(payload);}
-        GameMemory.Restored legacy=GameMemory.decode(legacyBytes.toByteArray());check(legacy.game().position().fen().equals(game.position().fen())&&legacy.game().history().equals(game.history()),"0.4 and 0.5 saved games migrate without losing legal history");
+        for(String name:new String[]{"legacy-v04.hod","legacy-v06.hod"}){
+            GameMemory.Restored legacy=GameMemory.decode(java.nio.file.Files.readAllBytes(java.nio.file.Path.of("tests/fixtures",name)));
+            check(legacy.game().position().fen().equals(game.position().fen())&&legacy.game().history().equals(game.history()),name+" keeps legal history");
+            var oldSeen=legacy.vision().recognize(render(pair,true,false),640,640,new BoardVision.Region(0,0,640));check(oldSeen.uncertain()==0&&pair.matches(oldSeen.board()),name+" keeps original contrast-based templates");
+            var migrated=GameMemory.decode(GameMemory.encode(legacy.game(),legacy.vision()));var migratedSeen=migrated.vision().recognize(render(pair,true,false),640,640,new BoardVision.Region(0,0,640));
+            check(migratedSeen.uncertain()==0&&pair.matches(migratedSeen.board()),name+" survives resaving in extended format");
+        }
         int[] full=screenWith(pair,1000,1500,220,350,640,false),crop=new int[640*640];
         for(int row=0;row<640;row++)System.arraycopy(full,(350+row)*1000+220,crop,row*640,640);
         check(vision.recognize(crop,640,640,new BoardVision.Region(0,0,640)).uncertain()==0&&Arrays.equals(vision.recognize(crop,640,640,new BoardVision.Region(0,0,640)).board(),pair.pieces()),"board-only capture preserves recognition at nonzero screen coordinates");

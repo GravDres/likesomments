@@ -24,6 +24,7 @@ public final class CaptureService extends Service {
     public static final String RESUME_CAPTURE="ru.hod.chess.RESUME_CAPTURE";
     private static final String STOP="ru.hod.chess.STOP";
     public static final String SIDE_CHANGED="ru.hod.chess.SIDE_CHANGED";
+    public static final String PLATFORM_CHANGED="ru.hod.chess.PLATFORM_CHANGED";
     private final Handler main=new Handler(Looper.getMainLooper());
     private HandlerThread captureThread;private Handler capture;
     private volatile MediaProjection projection;private volatile VirtualDisplay display;private volatile ImageReader reader;
@@ -49,7 +50,7 @@ public final class CaptureService extends Service {
     private volatile BoardVision vision;private volatile GameTracker tracker;private final StableBoard stability=new StableBoard();private int badFrames;private boolean whiteBottom;
     private final BoardRecoveryGate boardRecovery=new BoardRecoveryGate();
     private long lastPanelMoveAt;
-    private volatile PlayerSide playerSide;private volatile boolean boardVerified;private SessionStore sessionStore;
+    private volatile PlayerSide playerSide;private volatile boolean boardVerified;private SessionStore sessionStore;private volatile ChessPlatform platform;
     private long lastUiReport;
     private long lastFrame;private volatile int width,height;private volatile Analysis lastAnalysis;private volatile Position analyzedPosition;private volatile float currentConfidence;
     private record Frame(int[] pixels,int width,int height,int left,int top) {
@@ -65,6 +66,7 @@ public final class CaptureService extends Service {
         try{
             if(!initialized){initialize();if(intent==null)captureProblem="Окно восстановлено после остановки · нажми ↻ для захвата";}
             if(intent!=null&&SIDE_CHANGED.equals(intent.getAction()))changeSide(prefs().getBoolean("playerWhite",true)?PlayerSide.WHITE:PlayerSide.BLACK);
+            if(intent!=null&&PLATFORM_CHANGED.equals(intent.getAction()))changePlatform();
             if(intent!=null&&START_ROOT.equals(intent.getAction()))startRootCapture(intent.getBooleanExtra("refresh",false));
             else if(intent==null&&prefs().getBoolean("rootCapture",false))startRootCapture(false);
             else if(intent!=null&&intent.hasExtra("permission"))startCapture(intent);
@@ -89,8 +91,8 @@ public final class CaptureService extends Service {
     }
     private void initialize(){
         foreground(false);captureThread=new HandlerThread("screen-frames");captureThread.start();capture=new Handler(captureThread.getLooper());
-        arrows=new ArrowOverlay(this);whiteBottom=prefs().getBoolean("whiteBottom",true);playerSide=prefs().getBoolean("playerWhite",true)?PlayerSide.WHITE:PlayerSide.BLACK;sessionStore=new SessionStore(this);
-        try{GameMemory.Restored saved=sessionStore.load();if(saved!=null){vision=saved.vision();tracker=saved.game();}}catch(java.io.IOException e){captureProblem="Сохранённая партия не читается · начни новую";}
+        arrows=new ArrowOverlay(this);whiteBottom=prefs().getBoolean("whiteBottom",true);playerSide=prefs().getBoolean("playerWhite",true)?PlayerSide.WHITE:PlayerSide.BLACK;platform=ChessPlatform.fromPreference(prefs().getString("chessPlatform",null));sessionStore=new SessionStore(this,platform);
+        try{GameMemory.Restored saved=sessionStore.load();if(saved!=null){vision=saved.vision();tracker=saved.game();whiteBottom=vision.whiteBottom();}}catch(java.io.IOException e){captureProblem="Сохранённая партия не читается · начни новую";}
         panel=new FloatingPanel(this,new FloatingPanel.Actions(){
             public void calibrate(){if(capturing)startAutomaticSearch();else requestCapture();}
             public void manual(){if(capturing)selectBoard();else requestCapture();}
@@ -122,7 +124,7 @@ public final class CaptureService extends Service {
     private void captureConnected(int generation,boolean refresh){
         capturing=true;rootStarting=false;paused=false;panel.setPaused(false);region=null;confirmed=null;boardVerified=false;lastImageAt=SystemClock.elapsedRealtime();lastGoodAt=lastImageAt;lastFrame=0;readerRepairs=frameErrors=0;cleanFrames.reset();
         prefs().edit().remove("lastCaptureProblem").apply();
-        panel.message(rootMode?"Root подключён · открой Chess.com":"Экран подключён · ищу доску");warmEngine();
+        panel.message(rootMode?"Root подключён · открой "+platform.label():"Экран подключён · ищу доску "+platform.label());warmEngine();
         main.postDelayed(()->{if(!destroyed&&capturing&&generation==captureGeneration)startAutomaticSearch(refresh);},350);
     }
     private void startRootCapture(boolean refresh){
@@ -305,6 +307,18 @@ public final class CaptureService extends Service {
         try{sessionStore.archive(tracker,vision);}catch(java.io.IOException e){Log.e("HodCapture","Previous game backup failed",e);main.post(()->{if(!destroyed)Toast.makeText(this,"Не удалось сохранить копию прошлой партии",Toast.LENGTH_SHORT).show();});}
     }
     private int engineThreads(){return Math.max(1,Math.min(4,Runtime.getRuntime().availableProcessors()-1));}
+    private synchronized void changePlatform(){
+        ChessPlatform selected=ChessPlatform.fromPreference(prefs().getString("chessPlatform",null));if(selected==platform)return;
+        // Every recognition/save operation holds this monitor before committing. Invalidate
+        // old work before changing stores, so another platform cannot receive its history.
+        epoch.incrementAndGet();invalidateSearch();automaticSearch=false;automaticRetryAt=0;selecting=false;preparingSelection=false;
+        if(selector!=null){selector.close();selector=null;}if(review!=null){review.close();review=null;}
+        if(tracker!=null&&vision!=null)saveSession(tracker,vision);
+        platform=selected;sessionStore=new SessionStore(this,selected);tracker=null;vision=null;region=null;rememberedRegion=null;confirmed=null;latest=null;boardVerified=false;stability.clear();boardRecovery.reset();cleanFrames.reset();badFrames=0;
+        try{GameMemory.Restored saved=sessionStore.load();if(saved!=null){tracker=saved.game();vision=saved.vision();whiteBottom=vision.whiteBottom();}}catch(java.io.IOException e){panel.message("Сохранение "+selected.label()+" не читается · нужна начальная доска");}
+        engineQueue.submit(()->{if(destroyed||platform!=selected)return;try{if(engine instanceof UciEngine nativeEngine)nativeEngine.newGame();}catch(Exception e){ChessEngine old=engine;engine=null;if(old!=null)old.close();}});
+        panel.message(selected.label()+" выбран · открой его доску");if(capturing&&!paused)startAutomaticSearch();
+    }
     private synchronized void changeSide(PlayerSide side){
         if(destroyed)return;playerSide=side;panel.setSide(side);prefs().edit().putBoolean("playerWhite",side==PlayerSide.WHITE).apply();
         invalidateSearch();if(confirmed!=null&&boardVerified&&!paused){Position p=confirmed.position();if(side.ownsTurn(p))beginAnalysis(p,currentConfidence,epoch.get());else panel.waiting(side,confirmed.moves().size());}
@@ -359,10 +373,10 @@ public final class CaptureService extends Service {
         if(destroyed||!capturing||automaticSearch||selecting||preparingSelection)return;
         if(paused){Toast.makeText(this,"Сначала продолжи работу помощника",Toast.LENGTH_SHORT).show();return;}
         invalidateSearch();long gen=epoch.incrementAndGet();if(region!=null)rememberedRegion=region;region=null;confirmed=null;boardVerified=false;stability.clear();boardRecovery.reset();badFrames=0;
-        automaticRefresh=refresh;automaticFinder=new AutoBoardSearch(refresh);automaticAttempt=null;automaticMisses=0;automaticAfter=SystemClock.elapsedRealtime()+100;
+        automaticRefresh=refresh;automaticFinder=new AutoBoardSearch(refresh,platform.label());automaticAttempt=null;automaticMisses=0;automaticAfter=SystemClock.elapsedRealtime()+100;
         panel.prepareSearch();automaticRetryAt=0;automaticSearch=true;
         cleanFrames.block();main.post(()->{if(gen==epoch.get()&&!destroyed){arrows.hide();cleanFrames.hidden(System.nanoTime());panel.capturePulse();}});
-        Toast.makeText(this,refresh?"Обновляю доску · проверяю текущую или новую партию":tracker!=null&&!tracker.history().isEmpty()?"Ищу доску · продолжаю сохранённую партию":"Ищу доску. Открой начальную расстановку Chess.com",Toast.LENGTH_LONG).show();
+        Toast.makeText(this,refresh?"Обновляю доску · проверяю текущую или новую партию":tracker!=null&&!tracker.history().isEmpty()?"Ищу доску · продолжаю сохранённую партию":"Ищу доску. Открой начальную расстановку "+platform.label(),Toast.LENGTH_LONG).show();
         main.postDelayed(()->automaticTimeout(gen),18000);
     }
     private void probeAutomatic(Frame f,AutoBoardSearch finder,long gen){

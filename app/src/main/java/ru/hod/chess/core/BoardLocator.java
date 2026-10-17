@@ -87,7 +87,7 @@ public final class BoardLocator {
         boolean initial = true;
         float topInk = 0, bottomInk = 0;
         for (int square = 0; square < 64; square++) {
-            BoardVision.Feature feature = BoardVision.extract(pixels, width, r, square);
+            BoardVision.Feature feature = BoardVision.extract(pixels, width, r, square,true);
             int row = square / 8;
             if (row < 2 || row > 5) {
                 if (feature.occupancy() < .065f || feature.occupancy() > .85f) initial = false;

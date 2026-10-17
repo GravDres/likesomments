@@ -1,0 +1,127 @@
+[
+  {
+    "name": "brown",
+    "light": "0xfff0d9b6",
+    "dark": "0xffb58863"
+  },
+  {
+    "name": "blue",
+    "light": "0xffdee3e6",
+    "dark": "0xff8ca2ad"
+  },
+  {
+    "name": "green",
+    "light": "0xffffffdd",
+    "dark": "0xff86a666"
+  },
+  {
+    "name": "ic",
+    "light": "0xffececec",
+    "dark": "0xffc1c18e"
+  },
+  {
+    "name": "blue2",
+    "light": "0xff97b2c7",
+    "dark": "0xff546f82"
+  },
+  {
+    "name": "blue3",
+    "light": "0xffd9e0e6",
+    "dark": "0xff315991"
+  },
+  {
+    "name": "blueMarble",
+    "light": "0xffeae6dd",
+    "dark": "0xff7c7f87"
+  },
+  {
+    "name": "canvas",
+    "light": "0xffd7daeb",
+    "dark": "0xff547388"
+  },
+  {
+    "name": "greenPlastic",
+    "light": "0xfff2f9bb",
+    "dark": "0xff59935d"
+  },
+  {
+    "name": "grey",
+    "light": "0xffb8b8b8",
+    "dark": "0xff7d7d7d"
+  },
+  {
+    "name": "horsey",
+    "light": "0xfff0d9b5",
+    "dark": "0xff946f51"
+  },
+  {
+    "name": "leather",
+    "light": "0xffd1d1c9",
+    "dark": "0xffc28e16"
+  },
+  {
+    "name": "maple",
+    "light": "0xffe8ceab",
+    "dark": "0xffbc7944"
+  },
+  {
+    "name": "maple2",
+    "light": "0xffe2c89f",
+    "dark": "0xff996633"
+  },
+  {
+    "name": "marble",
+    "light": "0xff93ab91",
+    "dark": "0xff4f644e"
+  },
+  {
+    "name": "metal",
+    "light": "0xffc9c9c9",
+    "dark": "0xff727272"
+  },
+  {
+    "name": "newspaper",
+    "light": "0xffffffff",
+    "dark": "0xff8d8d8d"
+  },
+  {
+    "name": "olive",
+    "light": "0xffb8b19f",
+    "dark": "0xff6d6655"
+  },
+  {
+    "name": "pinkPyramid",
+    "light": "0xffe8e9b7",
+    "dark": "0xffed7272"
+  },
+  {
+    "name": "purple",
+    "light": "0xff9f90b0",
+    "dark": "0xff7d4a8d"
+  },
+  {
+    "name": "purpleDiag",
+    "light": "0xffe5daf0",
+    "dark": "0xff957ab0"
+  },
+  {
+    "name": "wood",
+    "light": "0xffd8a45b",
+    "dark": "0xff9b4d0f"
+  },
+  {
+    "name": "wood2",
+    "light": "0xffa38b5d",
+    "dark": "0xff6c5017"
+  },
+  {
+    "name": "wood3",
+    "light": "0xffd0ceca",
+    "dark": "0xff755839"
+  },
+  {
+    "name": "wood4",
+    "light": "0xffcaaf7d",
+    "dark": "0xff7b5330"
+  }
+]

@@ -13,10 +13,12 @@ public final class AutoBoardSearch {
     private record Candidate(BoardVision model,BoardVision.Observation observation) {}
     private final BoardLocator locator = new BoardLocator();
     private final boolean refresh;
+    private final String sourceName;
     private Pending pending;
     public AutoBoardSearch(){this(false);}
     /** Explicit refresh treats a visible starting board as a new game. */
-    public AutoBoardSearch(boolean refresh){this.refresh=refresh;}
+    public AutoBoardSearch(boolean refresh){this(refresh,"шахматное приложение");}
+    public AutoBoardSearch(boolean refresh,String sourceName){this.refresh=refresh;this.sourceName=Objects.requireNonNull(sourceName);}
 
     public Result inspect(int[] pixels, int width, int height,
                           BoardVision previous, GameTracker game) {
@@ -29,7 +31,7 @@ public final class AutoBoardSearch {
         BoardLocator.Detection d = locator.find(pixels, width, height,hint);
         if (d == null) {
             pending = null;
-            return result(State.SEARCHING, null, null, "Ищу доску · открой Chess.com");
+            return result(State.SEARCHING, null, null, "Ищу доску · открой "+sourceName);
         }
         if (d.ambiguous()) {
             pending = null;

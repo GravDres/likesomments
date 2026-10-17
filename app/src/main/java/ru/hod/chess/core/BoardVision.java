@@ -14,16 +14,18 @@ public final class BoardVision {
     private record Template(char piece,Feature feature) {}
     private final List<Template> templates=new ArrayList<>();
     private final boolean whiteBottom;
-    public BoardVision(boolean whiteBottom){this.whiteBottom=whiteBottom;}
-    public BoardVision withOrientation(boolean whiteBottom){BoardVision copy=new BoardVision(whiteBottom);copy.templates.addAll(templates);return copy;}
+    private final boolean interiorTone;
+    public BoardVision(boolean whiteBottom){this(whiteBottom,true);}
+    private BoardVision(boolean whiteBottom,boolean interiorTone){this.whiteBottom=whiteBottom;this.interiorTone=interiorTone;}
+    public BoardVision withOrientation(boolean whiteBottom){BoardVision copy=new BoardVision(whiteBottom,interiorTone);copy.templates.addAll(templates);return copy;}
     public boolean whiteBottom(){return whiteBottom;}
     public int templateCount(){return templates.size();}
     void writeTo(DataOutput out)throws IOException{
-        out.writeBoolean(whiteBottom);out.writeInt(templates.size());
+        out.writeBoolean(whiteBottom);out.writeBoolean(interiorTone);out.writeInt(templates.size());
         for(Template t:templates){out.writeChar(t.piece());out.writeFloat(t.feature().ink());out.writeFloat(t.feature().occupancy());for(float value:t.feature().mask())out.writeFloat(value);}
     }
-    static BoardVision readFrom(DataInput in)throws IOException{
-        BoardVision model=new BoardVision(in.readBoolean());int count=in.readInt();
+    static BoardVision readFrom(DataInput in,boolean extended)throws IOException{
+        boolean whiteBottom=in.readBoolean();BoardVision model=new BoardVision(whiteBottom,extended&&in.readBoolean());int count=in.readInt();
         if(count<12||count>96)throw new IOException("Некорректные шаблоны фигур");
         Set<Character> kinds=new HashSet<>();
         for(int i=0;i<count;i++){
@@ -41,7 +43,7 @@ public final class BoardVision {
         for(Template t:model.templates)labels.add(t.piece());
         for(int display=0;display<64;display++){
             char piece=confirmed.at(whiteBottom?display:63-display);if(piece=='.')continue;
-            Feature feature=extract(pixels,w,region,display);
+            Feature feature=extract(pixels,w,region,display,interiorTone);
             if(feature.occupancy()<.045f||feature.occupancy()>.88f)throw new IllegalArgumentException("Проверь фигуру на "+Position.square(whiteBottom?display:63-display));
             model.templates.add(new Template(piece,feature));labels.add(piece);
         }
@@ -56,7 +58,7 @@ public final class BoardVision {
         if(!region.inside(w,h))throw new IllegalArgumentException("Область доски вне экрана");
         List<Template> pending=new ArrayList<>();Position start=Position.start();Set<Character> labels=new HashSet<>();
         for(int display=0;display<64;display++){
-            int logical=whiteBottom?display:63-display;char piece=start.at(logical);Feature f=extract(pixels,w,region,display);
+            int logical=whiteBottom?display:63-display;char piece=start.at(logical);Feature f=extract(pixels,w,region,display,interiorTone);
             if(piece!='.') {if(f.occupancy()<0.065f||f.occupancy()>0.85f)throw new IllegalArgumentException("Не видны все фигуры. Нужна начальная позиция и точные границы доски.");pending.add(new Template(piece,f));labels.add(piece);}
             else if(f.occupancy()>0.06f)throw new IllegalArgumentException("В центре доски есть фигуры или рамка выделена неточно");
         }
@@ -69,7 +71,7 @@ public final class BoardVision {
         if(templates.isEmpty()||!region.inside(w,h))throw new IllegalStateException("Нужна калибровка");
         char[] board=new char[64];float confidence=1f;int uncertain=0;
         for(int display=0;display<64;display++){
-            Feature f=extract(pixels,w,region,display);char best='.';float first=Float.MAX_VALUE,second=Float.MAX_VALUE;
+            Feature f=extract(pixels,w,region,display,interiorTone);char best='.';float first=Float.MAX_VALUE,second=Float.MAX_VALUE;
             if(f.occupancy()<0.045f){board[whiteBottom?display:63-display]='.';continue;}
             Map<Character,Float> scores=new HashMap<>();for(Template t:templates)scores.merge(t.piece(),distance(f,t.feature()),Math::min);
             for(var s:scores.entrySet()){if(s.getValue()<first){second=first;first=s.getValue();best=s.getKey();}else if(s.getValue()<second)second=s.getValue();}
@@ -79,16 +81,25 @@ public final class BoardVision {
         }return new Observation(board,confidence,uncertain);
     }
     public static Feature extract(int[] pixels,int w,Region region,int square){
+        return extract(pixels,w,region,square,false);
+    }
+    public static Feature extract(int[] pixels,int w,Region region,int square,boolean interiorTone){
         float cell=region.size()/8f;int col=square%8,row=square/8;
         int x0=Math.round(region.left()+col*cell),y0=Math.round(region.top()+row*cell);
         // Median of inset corners ignores coordinates and most rounded piece shadows.
         int[] rs=new int[16],gs=new int[16],bs=new int[16];int k=0;
         for(float dy:new float[]{.10f,.18f,.82f,.90f})for(float dx:new float[]{.10f,.18f,.82f,.90f}){int px=pixels[(y0+Math.round(dy*cell))*w+x0+Math.round(dx*cell)];rs[k]=(px>>16)&255;gs[k]=(px>>8)&255;bs[k]=px&255;k++;}
-        Arrays.sort(rs);Arrays.sort(gs);Arrays.sort(bs);int br=rs[8],bg=gs[8],bb=bs[8];float[] mask=new float[N*N];float ink=0,occupied=0;int foreground=0;
+        Arrays.sort(rs);Arrays.sort(gs);Arrays.sort(bs);int br=rs[8],bg=gs[8],bb=bs[8];float[] mask=new float[N*N],lightness=interiorTone?new float[N*N]:null;float ink=0,occupied=0;int foreground=0;
         for(int y=0;y<N;y++)for(int x=0;x<N;x++){
             int xx=x0+Math.round((.12f+(x+.5f)/N*.76f)*cell),yy=y0+Math.round((.08f+(y+.5f)/N*.84f)*cell);int px=pixels[yy*w+xx];int r=(px>>16)&255,g=(px>>8)&255,b=px&255;
-            float dist=(r-br)*(r-br)+(g-bg)*(g-bg)+(b-bb)*(b-bb);float m=Math.max(0f,Math.min(1f,(dist-900f)/2200f));mask[y*N+x]=m;occupied+=m;if(m>.12f)foreground++;ink+=m*(.2126f*r+.7152f*g+.0722f*b)/255f;
-        }return new Feature(mask,occupied>0?ink/occupied:0,foreground/(float)(N*N));
+            float dist=(r-br)*(r-br)+(g-bg)*(g-bg)+(b-bb)*(b-bb);float m=Math.max(0f,Math.min(1f,(dist-900f)/2200f));mask[y*N+x]=m;occupied+=m;if(m>.12f)foreground++;float luma=(.2126f*r+.7152f*g+.0722f*b)/255f;ink+=m*luma;if(lightness!=null)lightness[y*N+x]=luma;
+        }
+        Feature feature=new Feature(mask,occupied>0?ink/occupied:0,foreground/(float)(N*N));
+        if(!interiorTone)return feature;
+        // White filling on a very light square has little contrast. Measuring only
+        // contrasting pixels sees its black outline and confuses it with a black piece.
+        float tone=0,mass=0;for(int i=0;i<N*N;i++){float filled=feature.silhouette()[i];tone+=filled*lightness[i];mass+=filled;}
+        return new Feature(mask,mass>0?tone/mass:feature.ink(),feature.occupancy(),feature.silhouette(),feature.normalized());
     }
     private static float[] canonical(float[] mask){
         boolean[] expanded=new boolean[N*N],outside=new boolean[N*N];int[] queue=new int[N*N];int head=0,tail=0;
