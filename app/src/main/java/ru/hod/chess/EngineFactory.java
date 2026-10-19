@@ -15,10 +15,16 @@ final class EngineFactory {
         return create(c,threads,settings(c));
     }
     static ChessEngine create(Context c,int threads,EngineSettings settings)throws Exception{
-        if(settings.mode()==EngineMode.MAIA){
+        if(settings.mode().usesMaia()){
             Properties manifest=new Properties();try(InputStream in=c.getAssets().open("maia/models.properties")){manifest.load(in);}catch(java.io.IOException e){throw new java.io.IOException("Maia-3 отсутствует в APK. Нужна полная сборка из Actions",e);}
             String name=settings.network().fileName();File model=ModelStore.ensure(new File(new File(c.getFilesDir(),"maia"),name),manifest.getProperty(name+".sha256"),()->c.getAssets().open("maia/"+name));
-            return new MaiaEngine(model,settings,threads);
+            MaiaEngine maia=new MaiaEngine(model,settings,threads);
+            if(settings.mode()==EngineMode.MAIA)return maia;
+            try{
+                File verifier=new File(c.getApplicationInfo().nativeLibraryDir,"libstockfish.so");
+                if(!verifier.isFile())throw new java.io.IOException("Для проверки Maia нужен Stockfish в полной сборке Actions");
+                return new TacticalMaiaEngine(maia,new UciEngine(verifier,threads,1,20));
+            }catch(Exception e){maia.close();throw e;}
         }
         File stockfish=new File(c.getApplicationInfo().nativeLibraryDir,"libstockfish.so");
         // A packaged executable is launched from the OS-managed native directory,

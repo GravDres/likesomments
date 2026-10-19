@@ -1,6 +1,6 @@
 package ru.hod.chess.core;
 
-/** Explicit user presets. Does not read clocks or change Maia's one-node policy. */
+/** Explicit user presets. Does not read clocks or change Maia's one-pass policy. */
 public enum TimeControlProfile {
     BULLET("1+0","Пуля · 1+0",300,4000),
     BLITZ_3_2("3+2","Блиц · 3+2",600,6000),

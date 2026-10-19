@@ -112,7 +112,7 @@ public final class CaptureService extends Service {
             public void profile(TimeControlProfile value){prefs().edit().putString(TimeControlProfile.PREFERENCE,value.key()).apply();changeEngineSettings();}
             public void pause(boolean value){setPaused(value);}
             public void arrows(boolean value){prefs().edit().putBoolean("arrows",value).apply();if(!value)hideArrow();}
-            public void deeper(){Position p=analyzedPosition;if(!capturing||paused||p==null||!playerSide.ownsTurn(p)){Toast.makeText(CaptureService.this,"Дождись своего хода и подтверждённой позиции",Toast.LENGTH_SHORT).show();return;}beginAnalysis(p,currentConfidence,epoch.get(),8000);}
+            public void deeper(){Position p=analyzedPosition;if(!capturing||paused||p==null||!playerSide.ownsTurn(p)){Toast.makeText(CaptureService.this,"Дождись своего хода и подтверждённой позиции",Toast.LENGTH_SHORT).show();return;}EngineSettings selected=EngineFactory.settings(CaptureService.this);beginAnalysis(p,currentConfidence,epoch.get(),selected.mode().usesMaia()?selected.analysisMillis():8000);}
             public void stop(){stopSelf();}
         });
         initialized=true;running=true;main.postDelayed(healthCheck,1000);main.post(framePulse);
@@ -213,7 +213,7 @@ public final class CaptureService extends Service {
                     else captureLost("Кадры экрана не поступают · нажми ↻ для нового захвата");
                 }
                 if(!paused&&region==null&&!automaticSearch&&!selecting&&!preparingSelection&&automaticRetryAt>0&&now>=automaticRetryAt)startAutomaticSearch(automaticRefresh);
-                if(!paused&&engineStartedAt>0&&!analysisComplete&&now-engineStartedAt>(engineLoading?60000:Math.max(15000,EngineFactory.settings(CaptureService.this).profile().inferenceTimeoutMillis()+5000))){
+                if(!paused&&engineStartedAt>0&&!analysisComplete&&now-engineStartedAt>(engineLoading?60000:EngineFactory.settings(CaptureService.this).responseTimeoutMillis())){
                     engineStartedAt=0;ChessEngine stalled=engine;engine=null;invalidateSearch();if(stalled!=null)stalled.close();panel.message("Перезапускаю расчёт · история сохранена");
                 }
             }else panel.health(rootStarting?"Root · ожидаю разрешение":"Захват остановлен · ↻ продолжить");

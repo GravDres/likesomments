@@ -34,5 +34,5 @@ bash scripts/test-core.sh
 bash scripts/build-maia.sh
 bash scripts/build-stockfish.sh
 "$task_root/tools/gradle-8.13/bin/gradle" --no-daemon :app:assembleDebug
-cp app/build/outputs/apk/debug/app-debug.apk artifacts/Hod-0.15-arm64-debug.apk
-echo "APK: $task_root/artifacts/Hod-0.15-arm64-debug.apk"
+cp app/build/outputs/apk/debug/app-debug.apk artifacts/Hod-0.16-arm64-debug.apk
+echo "APK: $task_root/artifacts/Hod-0.16-arm64-debug.apk"

@@ -7,7 +7,7 @@ import java.util.concurrent.*;
 import java.util.function.Consumer;
 
 /** One sequential client per native process, with bounded protocol waits. */
-public final class UciEngine implements HistoryEngine {
+public final class UciEngine implements RootMoveEngine {
     private final Process process;
     private final BufferedWriter input;
     private final BlockingQueue<String> output=new LinkedBlockingQueue<>(8192);
@@ -52,14 +52,24 @@ public final class UciEngine implements HistoryEngine {
         analyzeGame(Position.start(),expected,history,millis,progress);
     }
     public synchronized void analyzeGame(Position initial,Position expected,List<Move> history,int millis,Consumer<Analysis> progress)throws Exception{
+        analyzeCommand(expected,positionCommand(initial,expected,history),millis,progress);
+    }
+    public synchronized void analyzeMoveGame(Position initial,Position expected,List<Move> history,Move move,int millis,Consumer<Analysis> progress)throws Exception{
+        if(!expected.legalMoves().contains(move))throw new IllegalArgumentException("Проверяемый ход недопустим");
+        analyzeCommand(expected,positionCommand(initial,expected,history),millis," searchmoves "+move.uci(),progress);
+    }
+    private String positionCommand(Position initial,Position expected,List<Move> history){
         Position replay=initial;StringBuilder command=new StringBuilder(initial.fen().equals(Position.START)?"position startpos":"position fen "+initial.fen());
         if(!history.isEmpty())command.append(" moves");
         for(Move move:history){replay=replay.play(move);command.append(' ').append(move.uci());}
         if(!replay.fen().equals(expected.fen()))throw new IllegalArgumentException("История не соответствует позиции");
-        analyzeCommand(expected,command.toString(),millis,progress);
+        return command.toString();
     }
     private void analyzeCommand(Position p,String command,int millis,Consumer<Analysis> progress)throws Exception{
-        if(closed)throw new IOException("Движок остановлен");output.clear();send(command);send("go movetime "+millis);
+        analyzeCommand(p,command,millis,"",progress);
+    }
+    private void analyzeCommand(Position p,String command,int millis,String restriction,Consumer<Analysis> progress)throws Exception{
+        if(closed)throw new IOException("Движок остановлен");output.clear();send(command);send("go movetime "+millis+restriction);
         Map<Integer,Analysis.Line> lines=new TreeMap<>();int depth=0;long nodes=0;boolean stopping=false,completed=false;
         Map<Move,Analysis> knownMoves=new HashMap<>();Analysis published=null;
         long end=System.nanoTime()+(millis+5000L)*1_000_000L;
