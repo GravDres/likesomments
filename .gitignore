@@ -7,3 +7,6 @@ tools/
 third_party/
 app/src/main/jniLibs/
 artifacts/
+app/src/main/assets/maia/*.onnx
+app/src/main/assets/maia/models.properties
+app/src/main/assets/maia/provenance.json

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create a source bundle; CI also includes the exact bundled Stockfish sources."""
+"""Create a source bundle; CI includes the exact Stockfish and Maia sources/models."""
 import argparse
 import pathlib
 import zipfile
@@ -20,7 +20,7 @@ with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as arch
         if any(part in skip for part in relative.parts) or file.name == 'local.properties':
             continue
         if relative.parts[0] == 'third_party':
-            if not args.with_engine or relative.parts[1] != 'Stockfish-sf_19':
+            if not args.with_engine or relative.parts[1] not in {'Stockfish-sf_19', 'Maia3', 'Maia3-checkpoints'}:
                 continue
             if file.suffix in {'.o', '.a', '.so'} or file.name in {'stockfish', '.depend'}:
                 continue

@@ -7,8 +7,8 @@ permissions:
   contents: read
 jobs:
   build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -17,6 +17,10 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - name: Set up Python for Maia export
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
@@ -30,6 +34,8 @@ jobs:
         run: sdkmanager --install 'platforms;android-36' 'build-tools;36.0.0' 'ndk;28.2.13676358'
       - name: Test rules, engine strength, check highlights, vision and root transport
         run: bash scripts/test-core.sh
+      - name: Export official Maia-3 and verify ONNX and Java parity
+        run: bash scripts/build-maia.sh
       - name: Build official Stockfish 19 + NNUE for ARM64
         run: |
           export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.2.13676358"

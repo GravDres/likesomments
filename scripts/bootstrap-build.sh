@@ -31,7 +31,8 @@ if [ ! -x tools/gradle-8.13/bin/gradle ]; then
     unzip -q -o tools/gradle.zip -d tools
 fi
 bash scripts/test-core.sh
+bash scripts/build-maia.sh
 bash scripts/build-stockfish.sh
 "$task_root/tools/gradle-8.13/bin/gradle" --no-daemon :app:assembleDebug
-cp app/build/outputs/apk/debug/app-debug.apk artifacts/Hod-0.14-arm64-debug.apk
-echo "APK: $task_root/artifacts/Hod-0.14-arm64-debug.apk"
+cp app/build/outputs/apk/debug/app-debug.apk artifacts/Hod-0.15-arm64-debug.apk
+echo "APK: $task_root/artifacts/Hod-0.15-arm64-debug.apk"

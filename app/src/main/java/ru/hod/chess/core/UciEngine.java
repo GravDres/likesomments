@@ -7,7 +7,7 @@ import java.util.concurrent.*;
 import java.util.function.Consumer;
 
 /** One sequential client per native process, with bounded protocol waits. */
-public final class UciEngine implements ChessEngine {
+public final class UciEngine implements HistoryEngine {
     private final Process process;
     private final BufferedWriter input;
     private final BlockingQueue<String> output=new LinkedBlockingQueue<>(8192);
