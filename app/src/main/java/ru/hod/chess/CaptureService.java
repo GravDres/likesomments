@@ -52,7 +52,7 @@ public final class CaptureService extends Service {
     private volatile AutoAttempt automaticAttempt;private int automaticMisses;
     private volatile BoardVision vision;private volatile GameTracker tracker;private final StableBoard stability=new StableBoard();private int badFrames;private boolean whiteBottom;
     private final BoardRecoveryGate boardRecovery=new BoardRecoveryGate();
-    private long lastPanelMoveAt;
+    private long lastPanelOverlapAt;
     private volatile PlayerSide playerSide;private volatile boolean boardVerified;private SessionStore sessionStore;private volatile ChessPlatform platform;
     private long lastUiReport;
     private long lastFrame;private volatile int width,height;private volatile Analysis lastAnalysis;private volatile Position analyzedPosition;private volatile float currentConfidence;
@@ -260,11 +260,11 @@ public final class CaptureService extends Service {
         // Visibility may change during the pixel copy; recheck the clean-frame
         // boundary before calibration or recognition can consume this image.
         if(guide==null&&(arrowActive.get()||cleanVersion!=cleanFrames.version()))return;
-        if(automaticSearch){if(now>=automaticAfter&&processing.compareAndSet(false,true)){long gen=epoch.get();AutoBoardSearch finder=automaticFinder;visionQueue.execute(()->{try{probeAutomatic(f,finder,gen);}catch(Exception e){Log.e("HodCapture","Board search failed",e);main.post(()->{if(gen==epoch.get()&&!destroyed){automaticSearch=false;automaticRetryAt=SystemClock.elapsedRealtime()+5000;panel.setCompact(true);panel.message("Сбой распознавания: "+errorText(e)+" · повторю поиск");}});}finally{processing.set(false);}});}return;}
+        if(automaticSearch){if(now>=automaticAfter&&processing.compareAndSet(false,true)){long gen=epoch.get();AutoBoardSearch finder=automaticFinder;visionQueue.execute(()->{try{probeAutomatic(f,finder,gen);}catch(Exception e){Log.e("HodCapture","Board search failed",e);main.post(()->{if(gen==epoch.get()&&!destroyed){automaticSearch=false;automaticRetryAt=SystemClock.elapsedRealtime()+5000;panel.message("Сбой распознавания: "+errorText(e)+" · повторю поиск");}});}finally{processing.set(false);}});}return;}
         if(preparingSelection){if(now>=selectAfter){preparingSelection=false;selecting=true;long gen=epoch.get();boolean position=reviewRequested;main.post(()->{if(position)openReview(f,gen);else openSelector(f,gen);});}return;}
         if(paused||region==null)return;
         BoardVision.Region selected=region;long gen=epoch.get();
-        if(panel!=null&&panel.overlaps(selected)){boardVerified=false;stability.clear();hideArrow();if(now-lastPanelMoveAt>800){lastPanelMoveAt=now;main.post(()->{if(panel!=null&&gen==epoch.get()&&!destroyed){panel.placeOutside(selected,imageWidth,imageHeight);panel.message("Перемещаю окно за пределы доски");}});}return;}
+        if(panel!=null&&panel.overlaps(selected)){boardVerified=false;stability.clear();hideArrow();if(now-lastPanelOverlapAt>800){lastPanelOverlapAt=now;main.post(()->{if(panel!=null&&gen==epoch.get()&&!destroyed){boolean clear=panel.placeOutside(selected,imageWidth,imageHeight);panel.message(clear?"Доска открыта · проверяю позицию":"Окно перекрывает доску · сверни ↘ или перемести его");}});}return;}
         Guide shown=guide;
         if(shown!=null){
             // A screenshot containing our arrow is used ONLY for motion screening.
@@ -415,14 +415,15 @@ public final class CaptureService extends Service {
             automaticAttempt=new AutoAttempt(result,f);
             if(result.detection()==null){
                 int misses=++automaticMisses;
-                if(misses%4==0&&misses<=16){
+                if(misses%4==0&&misses<=16&&panel.automaticMovementAllowed()){
                     automaticAfter=SystemClock.elapsedRealtime()+350;
                     main.post(()->{if(gen==epoch.get()&&!destroyed)panel.searchCorner(misses/4-1);});
                 }
             }else automaticMisses=0;
             if(result.detection()!=null)rememberedRegion=result.detection().region();
-            main.post(()->{if(gen==epoch.get()&&!destroyed)panel.message(result.message());});
-            if(result.detection()!=null&&panel.overlaps(result.detection().region())){automaticAfter=SystemClock.elapsedRealtime()+300;main.post(()->{if(gen==epoch.get()&&!destroyed)panel.placeOutside(result.detection().region(),f.width(),f.height());});return;}
+            String searchMessage=result.detection()==null&&automaticMisses>=4&&!panel.automaticMovementAllowed()?result.message()+"\nЕсли окно закрывает доску, сверни ↘":result.message();
+            main.post(()->{if(gen==epoch.get()&&!destroyed)panel.message(searchMessage);});
+            if(result.detection()!=null&&panel.overlaps(result.detection().region())){automaticAfter=SystemClock.elapsedRealtime()+300;main.post(()->{if(gen==epoch.get()&&!destroyed){boolean clear=panel.placeOutside(result.detection().region(),f.width(),f.height());if(!clear)panel.message("Окно перекрывает доску · сверни ↘ или перемести его");}});return;}
             if(result.state()!=AutoBoardSearch.State.READY)return;
             AutoBoardSearch.Calibration calibration=result.calibration();
             GameTracker checked=calibration.game().restore();
@@ -439,7 +440,7 @@ public final class CaptureService extends Service {
     private synchronized void automaticTimeout(long gen){
         if(destroyed||gen!=epoch.get()||!automaticSearch)return;
         automaticSearch=false;automaticRetryAt=SystemClock.elapsedRealtime()+5000;epoch.incrementAndGet();AutoAttempt attempt=automaticAttempt;
-        panel.setCompact(true);
+
         if(attempt==null)panel.message("Нет кадра экрана · нажми ↻");
         else{
             AutoBoardSearch.State state=attempt.result().state();
@@ -508,7 +509,7 @@ public final class CaptureService extends Service {
     private void openSelector(Frame snapshot,long gen,BoardVision.Region initial){
         if(destroyed||gen!=epoch.get()){selecting=false;return;}
         try{selector=new BoardSelector(this,snapshot.pixels(),snapshot.width(),snapshot.height(),initial,whiteBottom,choice->{
-            selector=null;region=null;panel.setCompact(true);panel.message("Проверяю начальную позицию…");
+            selector=null;region=null;panel.message("Проверяю начальную позицию…");
             visionQueue.execute(()->{try{
                 BoardVision model=vision==null?null:vision.withOrientation(choice.whiteBottom());GameTracker previous=tracker;
                 GameTracker.Snapshot checkedGame=null;boolean reuse=false;
