@@ -37,6 +37,10 @@ jobs:
           gradle-version: '8.13'
       - name: Install SDK 36 and NDK r28c
         run: sdkmanager --install 'platforms;android-36' 'build-tools;36.0.0' 'ndk;28.2.13676358'
+      - name: Check release lint before engine exports
+        env:
+          HOD_KEYSTORE_PASSWORD: ${{ secrets.HOD_KEYSTORE_PASSWORD }}
+        run: gradle --no-daemon --stacktrace -PcompactOnly :app:lintVitalRelease
       - name: Test rules, panel position, engine strength, vision and root transport
         run: bash scripts/test-core.sh
       - name: Test signing, key mismatch and private source exclusions
@@ -69,6 +73,13 @@ jobs:
           name: Hod-Corresponding-Source
           path: artifacts/Hod-Source.zip
           if-no-files-found: error
+      - name: Download lint reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Hod-Lint-Reports
+          path: app/build/reports/lint-results*
+          if-no-files-found: ignore
       - name: Remove temporary signing key
         if: always()
         run: rm -f -- "$RUNNER_TEMP/hod-signing/hod-update.p12"

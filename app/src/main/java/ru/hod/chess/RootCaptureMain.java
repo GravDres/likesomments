@@ -1,5 +1,6 @@
 package ru.hod.chess;
 
+import android.annotation.SuppressLint;
 import android.graphics.Bitmap;
 import android.hardware.HardwareBuffer;
 import android.os.Build;
@@ -36,12 +37,9 @@ public final class RootCaptureMain {
     private static final class Access {
         final Object displayToken;final Class<?> builderClass,argsClass;final Method capture,asBitmap,hardware,secure;
         Access()throws Exception{
-            Class<?> factory=Class.forName("com.android.internal.os.ClassLoaderFactory");
-            String paths=System.getenv("SYSTEMSERVERCLASSPATH");if(paths==null||paths.isEmpty())paths="/system/framework/services.jar";
-            ClassLoader loader=(ClassLoader)factory.getDeclaredMethod("createClassLoader",String.class,String.class,String.class,ClassLoader.class,int.class,boolean.class,String.class)
-                .invoke(null,paths,null,null,ClassLoader.getSystemClassLoader(),0,true,null);
+            ClassLoader loader=createSystemServerLoader();
             Class<?> control=loader.loadClass("com.android.server.display.DisplayControl");
-            Method library=Runtime.class.getDeclaredMethod("loadLibrary0",Class.class,String.class);library.setAccessible(true);library.invoke(Runtime.getRuntime(),control,"android_servers");
+            loadDisplayControlLibrary(control);
             long[] ids=(long[])control.getMethod("getPhysicalDisplayIds").invoke(null);
             if(ids==null||ids.length==0)throw new IllegalStateException("Физический дисплей не найден");
             displayToken=control.getMethod("getPhysicalDisplayToken",long.class).invoke(null,ids[0]);
@@ -51,6 +49,24 @@ public final class RootCaptureMain {
             capture=screen.getMethod("captureDisplay",argsClass);
             Class<?> buffer=Class.forName("android.window.ScreenCapture$ScreenshotHardwareBuffer");
             asBitmap=buffer.getMethod("asBitmap");hardware=buffer.getMethod("getHardwareBuffer");secure=buffer.getMethod("containsSecureLayers");
+        }
+        // Deliberate privileged-process compatibility boundary, not an app API.
+        // main() checks UID 0 before constructing Access. A plain PathClassLoader
+        // would not request the shared system native-library namespace used here.
+        // Same mechanism: Genymobile/scrcpy, wrappers/DisplayControl.java.
+        @SuppressLint("BlockedPrivateApi")
+        private static ClassLoader createSystemServerLoader()throws Exception{
+            Class<?> factory=Class.forName("com.android.internal.os.ClassLoaderFactory");
+            String paths=System.getenv("SYSTEMSERVERCLASSPATH");if(paths==null||paths.isEmpty())paths="/system/framework/services.jar";
+            return (ClassLoader)factory.getDeclaredMethod("createClassLoader",String.class,String.class,String.class,ClassLoader.class,int.class,boolean.class,String.class)
+                .invoke(null,paths,null,null,ClassLoader.getSystemClassLoader(),0,true,null);
+        }
+        // The library must be registered against DisplayControl's owning loader.
+        // System.loadLibrary() here would use the caller's APK loader instead.
+        // Keep the exception local: release lint remains enabled for the app.
+        @SuppressLint("BlockedPrivateApi")
+        private static void loadDisplayControlLibrary(Class<?> control)throws Exception{
+            Method library=Runtime.class.getDeclaredMethod("loadLibrary0",Class.class,String.class);library.setAccessible(true);library.invoke(Runtime.getRuntime(),control,"android_servers");
         }
         RootCaptureWire.Frame capture(RootCaptureWire.Request r)throws Exception{
             Object builder=builderClass.getConstructor(IBinder.class).newInstance(displayToken);
