@@ -110,6 +110,7 @@ public final class CaptureService extends Service {
             public void model(MaiaModel value){prefs().edit().putInt(MaiaModel.PREFERENCE,value.rating()).apply();changeEngineSettings();}
             public void network(MaiaNetwork value){prefs().edit().putString(MaiaNetwork.PREFERENCE,value.key()).apply();changeEngineSettings();}
             public void profile(TimeControlProfile value){prefs().edit().putString(TimeControlProfile.PREFERENCE,value.key()).apply();changeEngineSettings();}
+            public void strongAnalysis(){EngineFactory.useStrongAnalysis(CaptureService.this);changeEngineSettings();}
             public void pause(boolean value){setPaused(value);}
             public void arrows(boolean value){prefs().edit().putBoolean("arrows",value).apply();if(!value)hideArrow();}
             public void deeper(){Position p=analyzedPosition;if(!capturing||paused||p==null||!playerSide.ownsTurn(p)){Toast.makeText(CaptureService.this,"Дождись своего хода и подтверждённой позиции",Toast.LENGTH_SHORT).show();return;}EngineSettings selected=EngineFactory.settings(CaptureService.this);beginAnalysis(p,currentConfidence,epoch.get(),selected.mode().usesMaia()?selected.analysisMillis():8000);}

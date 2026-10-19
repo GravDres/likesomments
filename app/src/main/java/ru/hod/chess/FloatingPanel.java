@@ -8,7 +8,7 @@ import android.widget.*;
 import ru.hod.chess.core.*;
 
 final class FloatingPanel {
-    interface Actions {void calibrate();void manual();void recover();void verify();void review();void side(PlayerSide side);void strength(EngineStrength value);void engine(EngineMode value);void model(MaiaModel value);void network(MaiaNetwork value);void profile(TimeControlProfile value);void newGame();void pause(boolean value);void arrows(boolean value);void deeper();void stop();}
+    interface Actions {void calibrate();void manual();void recover();void verify();void review();void side(PlayerSide side);void strength(EngineStrength value);void engine(EngineMode value);void model(MaiaModel value);void network(MaiaNetwork value);void profile(TimeControlProfile value);void strongAnalysis();void newGame();void pause(boolean value);void arrows(boolean value);void deeper();void stop();}
     private final Context c;private final WindowManager wm;private final WindowManager.LayoutParams lp;
     private final FrameLayout window;private final TextView bubble;
     private final LinearLayout root;private final ScrollView bodyScroll;
@@ -20,7 +20,7 @@ final class FloatingPanel {
     private boolean arrowsEnabled,locked,compact=true,minimized,paused,closed,dragging;
     private PlayerSide side;private float startX,startY;private int startLeft,startTop;
     private android.app.AlertDialog strengthDialog;
-    private volatile Rect bounds=new Rect();private BoardVision.Region board;private String lastMessage;
+    private volatile Rect bounds=new Rect();private BoardVision.Region board;private String lastMessage,lastDiagnostic;
     FloatingPanel(Context c,Actions actions){
         this.c=c;prefs=c.getSharedPreferences("hod",Context.MODE_PRIVATE);wm=c.getSystemService(WindowManager.class);
         side=prefs.getBoolean("playerWhite",true)?PlayerSide.WHITE:PlayerSide.BLACK;locked=prefs.getBoolean("panelLocked",true);
@@ -34,10 +34,12 @@ final class FloatingPanel {
         compactSummary=Ui.bold(c,"Ищу начальную доску…",13,Ui.INK);compactSummary.setLines(2);compactSummary.setEllipsize(TextUtils.TruncateAt.END);compactSummary.setGravity(Gravity.CENTER_VERTICAL);root.addView(compactSummary,new LinearLayout.LayoutParams(-1,Ui.dp(c,48)));
         LinearLayout quick=Ui.row(c);Button auto=small("Автопоиск",actions::verify);auto.setOnLongClickListener(v->{actions.manual();return true;});auto.setContentDescription("Найти доску автоматически. Удерживать для ручной рамки");quick.addView(auto,new LinearLayout.LayoutParams(0,Ui.dp(c,34),1));quick.addView(small("Позиция",actions::review),new LinearLayout.LayoutParams(0,Ui.dp(c,34),1));root.addView(quick);
         compactSummary.setOnClickListener(v->{if(lastMessage!=null){android.app.AlertDialog dialog=new android.app.AlertDialog.Builder(c).setTitle("Состояние помощника").setMessage(lastMessage).setPositiveButton("Понятно",null).create();dialog.getWindow().setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY);dialog.show();}});
+        compactSummary.setOnLongClickListener(v->{copyDiagnostic();return true;});compactSummary.setTooltipText("Удержи, чтобы скопировать последнюю подсказку и позицию");
         bodyScroll=new ScrollView(c);bodyScroll.setFillViewport(false);bodyScroll.setVisibility(View.GONE);root.addView(bodyScroll,new LinearLayout.LayoutParams(-1,0,1));
         LinearLayout body=Ui.col(c);bodyScroll.addView(body);
         sideButton=small(sideText(),()->actions.side(side.opposite()));sideButtonText();body.addView(sideButton,new LinearLayout.LayoutParams(-1,Ui.dp(c,40)));Ui.gap(body,6);
         engineButton=small("Движок",()->pick("Движок",java.util.Arrays.stream(EngineMode.values()).map(EngineMode::label).toArray(String[]::new),EngineFactory.settings(c).mode().ordinal(),i->actions.engine(EngineMode.values()[i])));body.addView(engineButton,new LinearLayout.LayoutParams(-1,Ui.dp(c,38)));Ui.gap(body,6);
+        body.addView(small("Сильный анализ · Stockfish 20/20",actions::strongAnalysis),new LinearLayout.LayoutParams(-1,Ui.dp(c,44)));Ui.gap(body,6);
         modelButton=small("Уровень Maia",()->pick("Уровень модели, не измеренный Elo",java.util.Arrays.stream(MaiaModel.values()).map(MaiaModel::label).toArray(String[]::new),EngineFactory.settings(c).model().ordinal(),i->actions.model(MaiaModel.values()[i])));body.addView(modelButton,new LinearLayout.LayoutParams(-1,Ui.dp(c,38)));Ui.gap(body,6);
         networkButton=small("Сеть Maia",()->pick("Сеть Maia-3",java.util.Arrays.stream(MaiaNetwork.values()).map(MaiaNetwork::label).toArray(String[]::new),EngineFactory.settings(c).network().ordinal(),i->actions.network(MaiaNetwork.values()[i])));body.addView(networkButton,new LinearLayout.LayoutParams(-1,Ui.dp(c,38)));Ui.gap(body,6);
         profileButton=small("Контроль времени",()->pick("Контроль времени",java.util.Arrays.stream(TimeControlProfile.values()).map(TimeControlProfile::label).toArray(String[]::new),EngineFactory.settings(c).profile().ordinal(),i->actions.profile(TimeControlProfile.values()[i])));body.addView(profileButton,new LinearLayout.LayoutParams(-1,Ui.dp(c,38)));Ui.gap(body,6);
@@ -57,6 +59,7 @@ final class FloatingPanel {
         lockButton=small(lockText(),()->{locked=!locked;prefs.edit().putBoolean("panelLocked",locked).apply();lockButtonText();});body.addView(lockButton,new LinearLayout.LayoutParams(-1,Ui.dp(c,38)));Ui.gap(body,6);
         deeperButton=small("Глубже · 8 секунд",actions::deeper);body.addView(deeperButton,new LinearLayout.LayoutParams(-1,Ui.dp(c,38)));Ui.gap(body,6);
         body.addView(small("Новая партия",actions::newGame),new LinearLayout.LayoutParams(-1,Ui.dp(c,38)));Ui.gap(body,6);
+        body.addView(small("Скопировать последнюю подсказку",this::copyDiagnostic),new LinearLayout.LayoutParams(-1,Ui.dp(c,44)));Ui.gap(body,6);
         body.addView(small("Остановить помощника",actions::stop),new LinearLayout.LayoutParams(-1,Ui.dp(c,38)));
         health=Ui.text(c,"Захват: подключаю…",10,Ui.MUTED);health.setSingleLine(true);health.setEllipsize(TextUtils.TruncateAt.END);root.addView(health,new LinearLayout.LayoutParams(-1,Ui.dp(c,20)));
         lp=new WindowManager.LayoutParams(Ui.dp(c,230),Ui.dp(c,160),WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE|WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL|WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,PixelFormat.TRANSLUCENT);
@@ -82,6 +85,10 @@ final class FloatingPanel {
     private void sideButtonText(){sideButton.setText(sideText());quickSide.setText(compactSideText());quickSide.setContentDescription("Ты играешь "+side.label()+". Нажми, чтобы играть "+side.opposite().label());}
     private String arrowText(){return arrowsEnabled?"Стрелка: вкл":"Стрелка: выкл";}
     private String lockText(){return locked?"Окно закреплено · разрешить перенос":"Окно можно двигать · закрепить";}
+    private void copyDiagnostic(){
+        if(lastDiagnostic==null){Toast.makeText(c,"Ещё нет готовой подсказки",Toast.LENGTH_SHORT).show();return;}
+        c.getSystemService(ClipboardManager.class).setPrimaryClip(ClipData.newPlainText("ХОД · последняя подсказка",lastDiagnostic));Toast.makeText(c,"Подсказка и позиция скопированы",Toast.LENGTH_SHORT).show();
+    }
     private void setMinimized(boolean value){
         if(closed||minimized==value)return;
         if(strengthDialog!=null){strengthDialog.dismiss();strengthDialog=null;}
@@ -152,7 +159,10 @@ final class FloatingPanel {
     void show(Position p,Analysis a,float confidence,boolean complete,int plies){
         if(closed||!side.ownsTurn(p))return;lastMessage=null;
         status.setText("●  "+(complete?"Готово":"Считаю")+" · совпадение "+Math.round(confidence*100)+"%");status.setTextColor(Ui.ACCENT);score.setText(a.score());Move best=a.bestMove();
-        compactSummary.setText(best==null?"Партия завершена":Position.square(best.from())+" → "+Position.square(best.to())+(best.promotion()!='\0'?"="+best.promotion():"")+"   ·   "+a.score()+"\n"+(complete?"Готово":"Считаю…")+(EngineFactory.settings(c).mode()==EngineMode.MAIA_TACTICAL?(a.engine().contains("ход заменён")?" · ход заменён":" · проверено"):(a.policyProbability()==null?" · глубина "+a.depth():" · Maia "+EngineFactory.settings(c).model().rating())));
+        EngineSettings settings=EngineFactory.settings(c);
+        String shortEngine=settings.mode()==EngineMode.MAIA_TACTICAL?(a.engine().contains("ход заменён")?"Stockfish":"Maia+"):settings.mode()==EngineMode.STOCKFISH?"SF "+settings.strength().skill()+"/20":"Maia "+settings.model().rating();
+        compactSummary.setText(best==null?"Партия завершена":Position.square(best.from())+" → "+Position.square(best.to())+(best.promotion()!='\0'?"="+best.promotion():"")+"   ·   "+a.score()+"\n"+(complete?"Готово":"Считаю…")+" · "+shortEngine+(a.policyProbability()==null?" · d"+a.depth():""));
+        if(complete)lastDiagnostic="ХОД 0.18 · последняя готовая подсказка\nFEN: "+p.fen()+"\nХод: "+(best==null?"—":best.uci())+"\nДвижок: "+a.engine()+"\nНастройки: "+settings.label()+" · "+settings.profile().key()+" · расчёт="+settings.analysisMillis()+" мс · вероятностный выбор="+settings.sampling()+"\nГлубина: "+a.depth()+" · оценка: "+a.score()+"\nСовпадение: "+Math.round(confidence*100)+"% · полуходов: "+plies+" · свой цвет: "+side.label();
         move.setText(best==null?"Нет легальных ходов":p.describe(best));details.setText(a.policyProbability()!=null?a.engine()+"\nВероятность выбора хода, не оценка позиции":a.engine()+" · глубина "+a.depth()+"\nИстория: "+plies+" полуходов · оценка за белых");
         StringBuilder lines=new StringBuilder();for(Analysis.Line line:a.lines()){lines.append(line.rank()).append(". ");int n=0;for(Move m:line.moves()){if(n++>=4)break;lines.append(m.uci()).append(' ');}lines.append('\n');}variants.setText(lines.toString().trim());
     }

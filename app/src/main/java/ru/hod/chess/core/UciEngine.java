@@ -58,6 +58,22 @@ public final class UciEngine implements RootMoveEngine {
         if(!expected.legalMoves().contains(move))throw new IllegalArgumentException("Проверяемый ход недопустим");
         analyzeCommand(expected,positionCommand(initial,expected,history),millis," searchmoves "+move.uci(),progress);
     }
+    public synchronized void compareMovesGame(Position initial,Position expected,List<Move> history,List<Move> roots,int millis,Consumer<Analysis> progress)throws Exception{
+        List<Move> candidates=List.copyOf(roots);
+        if(candidates.size()!=2||new HashSet<>(candidates).size()!=2||!expected.legalMoves().containsAll(candidates))throw new IllegalArgumentException("Нужны два разных легальных хода для сравнения");
+        if(configuredSkill!=20)throw new IllegalStateException("Для тактического сравнения нужна максимальная сила Stockfish");
+        String command=positionCommand(initial,expected,history);
+        try{
+            send("setoption name MultiPV value 2");send("isready");await("readyok",8000);
+            analyzeCommand(expected,command,millis," searchmoves "+candidates.get(0).uci()+" "+candidates.get(1).uci(),new HashSet<>(candidates),progress);
+        }finally{
+            // Restore the normal search even after cancellation, preserving the
+            // interrupt flag so the caller cannot publish an old recommendation.
+            boolean interrupted=Thread.interrupted();
+            try{if(!closed){send("setoption name MultiPV value "+configuredVariations);send("isready");await("readyok",2000);}}
+            finally{if(interrupted)Thread.currentThread().interrupt();}
+        }
+    }
     private String positionCommand(Position initial,Position expected,List<Move> history){
         Position replay=initial;StringBuilder command=new StringBuilder(initial.fen().equals(Position.START)?"position startpos":"position fen "+initial.fen());
         if(!history.isEmpty())command.append(" moves");
@@ -69,9 +85,12 @@ public final class UciEngine implements RootMoveEngine {
         analyzeCommand(p,command,millis,"",progress);
     }
     private void analyzeCommand(Position p,String command,int millis,String restriction,Consumer<Analysis> progress)throws Exception{
+        analyzeCommand(p,command,millis,restriction,null,progress);
+    }
+    private void analyzeCommand(Position p,String command,int millis,String restriction,Set<Move> comparison,Consumer<Analysis> progress)throws Exception{
         if(closed)throw new IOException("Движок остановлен");output.clear();send(command);send("go movetime "+millis+restriction);
         Map<Integer,Analysis.Line> lines=new TreeMap<>();int depth=0;long nodes=0;boolean stopping=false,completed=false;
-        Map<Move,Analysis> knownMoves=new HashMap<>();Analysis published=null;
+        Map<Move,Analysis> knownMoves=new HashMap<>();Analysis published=null,completedComparison=null;
         long end=System.nanoTime()+(millis+5000L)*1_000_000L;
         try{
             while(System.nanoTime()<end&&!closed){
@@ -84,6 +103,11 @@ public final class UciEngine implements RootMoveEngine {
                         Move best;
                         try{best=Move.parse(finalTokens[1]);}catch(IllegalArgumentException e){throw new IOException("Некорректный итоговый ход",e);}
                         if(!p.legalMoves().contains(best))throw new IOException("Итоговый ход недопустим в текущей позиции");
+                        if(comparison!=null){
+                            if(!comparison.contains(best))throw new IOException("Итоговый ход вне сравниваемой пары");
+                            if(completedComparison==null)throw new RootMoveEngine.IncompleteComparisonException();
+                            progress.accept(completedComparison);completed=true;break;
+                        }
                         Analysis chosen=configuredSkill==20&&published!=null&&best.equals(published.bestMove())?published:knownMoves.get(best);
                         if(chosen==null)throw new IOException("Для итогового хода нет подтверждённого варианта");
                         progress.accept(chosen);
@@ -91,16 +115,21 @@ public final class UciEngine implements RootMoveEngine {
                     completed=true;break;
                 }
                 if(!line.startsWith("info ")||!line.contains(" pv ")||line.contains("lowerbound")||line.contains("upperbound")||stopping)continue;
-                String[] t=line.split(" ");int rank=1,cp=0,d=0;Integer mate=null;List<Move> pv=new ArrayList<>();long n=nodes;
+                String[] t=line.split("\\s+");int rank=1,cp=0,d=0;boolean scored=false;Integer mate=null;List<Move> pv=new ArrayList<>();long n=nodes;
                 try{
-                    for(int i=1;i<t.length;i++)switch(t[i]){case "depth":d=Integer.parseInt(t[++i]);break;case "nodes":n=Long.parseLong(t[++i]);break;case "multipv":rank=Integer.parseInt(t[++i]);break;case "score":String type=t[++i];int score=Integer.parseInt(t[++i])*(p.white?1:-1);if(type.equals("mate"))mate=score;else cp=score;break;case "pv":Position cursor=p;while(++i<t.length){Move m=Move.parse(t[i]);if(!cursor.legalMoves().contains(m))break;pv.add(m);cursor=cursor.applyUnchecked(m);}break;}
-                    if(pv.isEmpty())continue;
+                    for(int i=1;i<t.length;i++)switch(t[i]){case "depth":d=Integer.parseInt(t[++i]);break;case "nodes":n=Long.parseLong(t[++i]);break;case "multipv":rank=Integer.parseInt(t[++i]);break;case "score":String type=t[++i];int score=Integer.parseInt(t[++i])*(p.white?1:-1);if(type.equals("mate")){mate=score;scored=true;}else if(type.equals("cp")){cp=score;scored=true;}break;case "pv":Position cursor=p;while(++i<t.length){Move m=Move.parse(t[i]);if(!cursor.legalMoves().contains(m))break;pv.add(m);cursor=cursor.applyUnchecked(m);}break;}
+                    if(pv.isEmpty()||!scored||rank<1||d<1)continue;
+                    if(comparison!=null&&(rank>2||!comparison.contains(pv.get(0))))continue;
                     knownMoves.put(pv.get(0),new Analysis(name(),d,n,cp,mate,List.of(new Analysis.Line(1,cp,mate,List.copyOf(pv)))));
                     if(d>depth){lines.clear();depth=d;}if(d<depth)continue;nodes=n;lines.put(rank,new Analysis.Line(rank,cp,mate,List.copyOf(pv)));
-                    if(lines.containsKey(1)){Analysis.Line first=lines.get(1);published=new Analysis(name(),depth,nodes,first.centipawns(),first.mate(),List.copyOf(lines.values()));if(configuredSkill==20)progress.accept(published);}
-                }catch(IllegalArgumentException ignored){}
+                    if(lines.containsKey(1)){
+                        Analysis.Line first=lines.get(1);published=new Analysis(name(),depth,nodes,first.centipawns(),first.mate(),List.copyOf(lines.values()));
+                        if(comparison==null){if(configuredSkill==20)progress.accept(published);}
+                        else if(lines.containsKey(2)&&!first.moves().get(0).equals(lines.get(2).moves().get(0)))completedComparison=published;
+                    }
+                }catch(IllegalArgumentException|IndexOutOfBoundsException ignored){}
             }
-        }catch(InterruptedException e){Thread.interrupted();send("stop");awaitBestMove();return;}
+        }catch(InterruptedException e){stopping=true;Thread.interrupted();send("stop");awaitBestMove();return;}
         finally{if(stopping)Thread.currentThread().interrupt();}
         if(!completed){close();throw new IOException("Движок не завершил анализ вовремя");}
     }

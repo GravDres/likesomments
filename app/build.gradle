@@ -1,14 +1,31 @@
 plugins { id 'com.android.application' }
+def hodSigningStore = System.getenv('HOD_SIGNING_STORE')
+def hodSigningPassword = System.getenv('HOD_KEYSTORE_PASSWORD')
 android {
     namespace 'ru.hod.chess'
     compileSdk 36
     buildToolsVersion '36.0.0'
     ndkVersion '28.2.13676358'
-    defaultConfig { applicationId 'ru.hod.chess'; minSdk 29; targetSdk 36; versionCode 16; versionName '0.16.0'; ndk { abiFilters 'arm64-v8a' } }
+    defaultConfig { applicationId 'ru.hod.chess'; minSdk 29; targetSdk 36; versionCode 18; versionName '0.18.0'; ndk { abiFilters 'arm64-v8a' } }
+    signingConfigs {
+        persistent {
+            if (hodSigningStore) storeFile file(hodSigningStore)
+            storeType 'PKCS12'
+            storePassword hodSigningPassword
+            keyAlias 'hod'
+            keyPassword hodSigningPassword
+            enableV1Signing false
+            enableV2Signing true
+            enableV3Signing true
+        }
+    }
     androidResources { noCompress += ['onnx'] }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17; coreLibraryDesugaringEnabled true }
     packaging { jniLibs { useLegacyPackaging = true } }
-    buildTypes { release { minifyEnabled false } }
+    buildTypes {
+        debug { signingConfig signingConfigs.persistent }
+        release { minifyEnabled false; signingConfig signingConfigs.persistent }
+    }
 }
 dependencies { coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'; implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.23.2' }
 tasks.register('verifyEngine') {
@@ -21,4 +38,11 @@ tasks.register('verifyEngine') {
         }
     }
 }
-tasks.named('preBuild').configure { dependsOn 'verifyEngine' }
+tasks.register('verifySigning') {
+    doLast {
+        if (!hodSigningStore || !hodSigningPassword || !file(hodSigningStore).isFile()) {
+            throw new GradleException('Permanent signing key is missing. Run scripts/setup-signing-termux.sh once and prepare-signing.py before building. A new random debug key is intentionally not generated.')
+        }
+    }
+}
+tasks.named('preBuild').configure { dependsOn 'verifyEngine', 'verifySigning' }

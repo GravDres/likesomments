@@ -17,6 +17,11 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - name: Restore permanent signing key
+        env:
+          HOD_KEYSTORE_BASE64: ${{ secrets.HOD_KEYSTORE_BASE64 }}
+          HOD_KEYSTORE_PASSWORD: ${{ secrets.HOD_KEYSTORE_PASSWORD }}
+        run: python3 scripts/prepare-signing.py --output "$RUNNER_TEMP/hod-signing/hod-update.p12"
       - name: Set up Python for Maia export
         uses: actions/setup-python@v5
         with:
@@ -34,25 +39,29 @@ jobs:
         run: sdkmanager --install 'platforms;android-36' 'build-tools;36.0.0' 'ndk;28.2.13676358'
       - name: Test rules, engine strength, check highlights, vision and root transport
         run: bash scripts/test-core.sh
+      - name: Test signing, key mismatch and private source exclusions
+        run: python3 tests/test-signing.py
       - name: Export official Maia-3 and verify ONNX and Java parity
         run: bash scripts/build-maia.sh
       - name: Build official Stockfish 19 + NNUE for ARM64
         run: |
           export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.2.13676358"
           bash scripts/build-stockfish.sh
-      - name: Build installable debug APK
-        run: gradle --no-daemon --stacktrace :app:assembleDebug
+      - name: Build installable signed APK
+        env:
+          HOD_KEYSTORE_PASSWORD: ${{ secrets.HOD_KEYSTORE_PASSWORD }}
+        run: gradle --no-daemon --stacktrace :app:assembleRelease
       - name: Verify bundled engine and package
         run: |
-          python3 scripts/verify-apk.py app/build/outputs/apk/debug/app-debug.apk
-          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify app/build/outputs/apk/debug/app-debug.apk
+          python3 scripts/verify-apk.py app/build/outputs/apk/release/app-release.apk
+          python3 scripts/verify-signature.py app/build/outputs/apk/release/app-release.apk --apksigner "$ANDROID_HOME/build-tools/36.0.0/apksigner"
       - name: Package exact corresponding source
         run: python3 scripts/package-source.py --with-engine
       - name: Download APK
         uses: actions/upload-artifact@v4
         with:
           name: Hod-Android-arm64
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
       - name: Download source and engine networks
         uses: actions/upload-artifact@v4
@@ -60,3 +69,6 @@ jobs:
           name: Hod-Corresponding-Source
           path: artifacts/Hod-Source.zip
           if-no-files-found: error
+      - name: Remove temporary signing key
+        if: always()
+        run: rm -f -- "$RUNNER_TEMP/hod-signing/hod-update.p12"

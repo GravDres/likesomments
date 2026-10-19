@@ -3,6 +3,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 task_root="$PWD"
+if [[ -z "${HOD_SIGNING_STORE:-}" || -z "${HOD_KEYSTORE_PASSWORD:-}" || ! -f "${HOD_SIGNING_STORE:-}" ]]; then
+    echo 'Set HOD_SIGNING_STORE to your permanent hod-update.p12 and HOD_KEYSTORE_PASSWORD before building. See docs/SIGNING.md.' >&2
+    exit 1
+fi
 mkdir -p tools artifacts
 download() { if [ ! -s "$2" ]; then curl --fail --location --retry 2 --connect-timeout 15 --max-time 600 "$1" -o "$2.part"; mv "$2.part" "$2"; fi; }
 if [ ! -x tools/jdk/bin/javac ]; then
@@ -31,8 +35,11 @@ if [ ! -x tools/gradle-8.13/bin/gradle ]; then
     unzip -q -o tools/gradle.zip -d tools
 fi
 bash scripts/test-core.sh
+python3 tests/test-signing.py
 bash scripts/build-maia.sh
 bash scripts/build-stockfish.sh
-"$task_root/tools/gradle-8.13/bin/gradle" --no-daemon :app:assembleDebug
-cp app/build/outputs/apk/debug/app-debug.apk artifacts/Hod-0.16-arm64-debug.apk
-echo "APK: $task_root/artifacts/Hod-0.16-arm64-debug.apk"
+"$task_root/tools/gradle-8.13/bin/gradle" --no-daemon :app:assembleRelease
+python3 scripts/verify-apk.py app/build/outputs/apk/release/app-release.apk
+python3 scripts/verify-signature.py app/build/outputs/apk/release/app-release.apk --apksigner "$ANDROID_HOME/build-tools/36.0.0/apksigner"
+cp app/build/outputs/apk/release/app-release.apk artifacts/Hod-0.18-arm64.apk
+echo "APK: $task_root/artifacts/Hod-0.18-arm64.apk"

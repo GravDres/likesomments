@@ -7,6 +7,9 @@ import java.util.Properties;
 import ru.hod.chess.core.*;
 
 final class EngineFactory {
+    static void useStrongAnalysis(Context c){
+        c.getSharedPreferences("hod",Context.MODE_PRIVATE).edit().putString(EngineMode.PREFERENCE,EngineMode.STOCKFISH.key()).putInt(EngineStrength.PREFERENCE,20).putString(TimeControlProfile.PREFERENCE,TimeControlProfile.CUSTOM.key()).putInt("millis",1500).putBoolean("maiaSampling",false).apply();
+    }
     static EngineSettings settings(Context c){
         android.content.SharedPreferences p=c.getSharedPreferences("hod",Context.MODE_PRIVATE);
         return new EngineSettings(EngineMode.fromPreference(p.getString(EngineMode.PREFERENCE,null)),MaiaModel.fromPreference(p.getInt(MaiaModel.PREFERENCE,2200)),MaiaNetwork.fromPreference(p.getString(MaiaNetwork.PREFERENCE,null)),TimeControlProfile.fromPreference(p.getString(TimeControlProfile.PREFERENCE,null)),EngineStrength.fromPreference(p.getInt(EngineStrength.PREFERENCE,EngineStrength.DEFAULT_SKILL)),p.getInt("millis",1500),p.getBoolean("maiaSampling",true));

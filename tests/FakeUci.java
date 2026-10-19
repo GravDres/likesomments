@@ -30,8 +30,20 @@ public final class FakeUci {
                 emit("info depth 9 multipv 1 score cp 999 nodes 110 pv e2e5"); // Invalid PV must not replace a valid result.
                 if(variations>=3){best=black?"d7d5":"d2d4";emit("info depth 8 multipv 2 score cp 10 nodes 120 pv "+best);}
                 if(variations>=4){emit("info depth 8 multipv 3 score cp -35 nodes 130 pv "+(black?"c7c5":"c2c4"));best=black?"g8f6":"g1f3";emit("info depth 8 multipv 4 score cp -100 nodes 140 pv "+best);}
-                if(command.contains(" searchmoves ")){best=command.substring(command.indexOf(" searchmoves ")+13).trim();emit("info depth 10 multipv 1 score cp -250 nodes 200 pv "+best);}
-                if(args.length>0)best=args[0].equals("illegal")?"e2e5":"g1h3";
+                if(command.contains(" searchmoves ")){
+                    String[] roots=command.substring(command.indexOf(" searchmoves ")+13).trim().split(" ");best=roots[0];
+                    if(roots.length==1)emit("info depth 10 multipv 1 score cp -250 nodes 200 pv "+best);
+                    else{
+                        if(roots.length!=2||variations!=2||skill!=20)throw new IllegalStateException("Root comparison must use exactly two PVs at full strength");
+                        emit("info depth 12 multipv 1 score cp 35 nodes 200 pv "+roots[0]);
+                        if(args.length==0||!args[0].equals("pair-incomplete"))emit("info depth 12 multipv 2 score cp -250 nodes 210 "+(args.length>0&&args[0].equals("pair-bound")?"upperbound ":"")+"pv "+(args.length>0&&args[0].equals("pair-duplicate")?roots[0]:roots[1]));
+                        emit("info depth 13 multipv 1 score cp 9999 nodes 220 pv "+roots[1]);
+                        emit("info depth 14 multipv 2 score cp"); // Truncated output is ignored.
+                        best=roots[1]; // Final bestmove must not mix scores from the unfinished depth.
+                    }
+                }
+                if(args.length>0&&args[0].equals("illegal"))best="e2e5";
+                if(args.length>0&&args[0].equals("unreported"))best="g1h3";
                 pending=timer.schedule(()->emit("bestmove "+best),Integer.parseInt(command.split(" ")[2]),TimeUnit.MILLISECONDS);
             }else if(command.equals("stop")){if(pending!=null)pending.cancel(false);emit("bestmove "+best);}
             else if(command.equals("quit"))break;
