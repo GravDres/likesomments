@@ -8,15 +8,16 @@ import android.widget.*;
 import ru.hod.chess.core.*;
 
 final class FloatingPanel {
-    interface Actions {void calibrate();void manual();void recover();void verify();void review();void side(PlayerSide side);void newGame();void pause(boolean value);void arrows(boolean value);void deeper();void stop();}
+    interface Actions {void calibrate();void manual();void recover();void verify();void review();void side(PlayerSide side);void strength(EngineStrength value);void newGame();void pause(boolean value);void arrows(boolean value);void deeper();void stop();}
     private final Context c;private final WindowManager wm;private final WindowManager.LayoutParams lp;
     private final LinearLayout root;private final ScrollView bodyScroll;
     private final TextView status,score,move,details,variants,compactSummary,health,captureDot;
     private boolean pulse;
-    private final Button collapse,pause,arrowToggle,sideButton,quickSide,lockButton;
+    private final Button collapse,pause,arrowToggle,sideButton,quickSide,lockButton,strengthButton;
     private final SharedPreferences prefs;
     private boolean arrowsEnabled,locked,compact=true,paused,closed,dragging;
     private PlayerSide side;private float startX,startY;private int startLeft,startTop;
+    private android.app.AlertDialog strengthDialog;
     private volatile Rect bounds=new Rect();private BoardVision.Region board;private String lastMessage;
     FloatingPanel(Context c,Actions actions){
         this.c=c;prefs=c.getSharedPreferences("hod",Context.MODE_PRIVATE);wm=c.getSystemService(WindowManager.class);
@@ -31,6 +32,11 @@ final class FloatingPanel {
         bodyScroll=new ScrollView(c);bodyScroll.setFillViewport(false);bodyScroll.setVisibility(View.GONE);root.addView(bodyScroll,new LinearLayout.LayoutParams(-1,0,1));
         LinearLayout body=Ui.col(c);bodyScroll.addView(body);
         sideButton=small(sideText(),()->actions.side(side.opposite()));sideButtonText();body.addView(sideButton,new LinearLayout.LayoutParams(-1,Ui.dp(c,40)));Ui.gap(body,6);
+        strengthButton=small(strengthText(),()->{
+            if(closed||strengthDialog!=null)return;
+            EngineStrength[] levels=EngineStrength.values();String[] labels=new String[levels.length];for(int i=0;i<levels.length;i++)labels[i]=levels[i].label();
+            android.app.AlertDialog dialog=new android.app.AlertDialog.Builder(c).setTitle("Сила подсказок Stockfish").setSingleChoiceItems(labels,engineStrength().ordinal(),(d,index)->{actions.strength(levels[index]);d.dismiss();}).setNegativeButton("Закрыть",null).create();strengthDialog=dialog;dialog.setOnDismissListener(d->{if(strengthDialog==dialog)strengthDialog=null;});dialog.getWindow().setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY);dialog.show();
+        });body.addView(strengthButton,new LinearLayout.LayoutParams(-1,Ui.dp(c,38)));Ui.gap(body,6);
         status=Ui.text(c,"Ищу начальную доску…",12,Ui.MUTED);status.setMaxLines(8);body.addView(status);Ui.gap(body,6);
         score=Ui.bold(c,"—",28,Ui.INK);body.addView(score,new LinearLayout.LayoutParams(-1,Ui.dp(c,38)));
         move=Ui.bold(c,"Жду точную позицию",15,Ui.INK);move.setMaxLines(2);body.addView(move,new LinearLayout.LayoutParams(-1,Ui.dp(c,44)));
@@ -53,6 +59,9 @@ final class FloatingPanel {
     private void arrowToggleText(){arrowToggle.setText(arrowText());}
     private void lockButtonText(){lockButton.setText(lockText());}
     void setSide(PlayerSide value){side=value;sideButtonText();}
+    private EngineStrength engineStrength(){return EngineStrength.fromPreference(prefs.getInt(EngineStrength.PREFERENCE,EngineStrength.DEFAULT_SKILL));}
+    private String strengthText(){return "Сила: "+engineStrength().skill()+"/20 · изменить";}
+    void setStrength(EngineStrength value){strengthButton.setText("Сила: "+value.skill()+"/20 · изменить");}
     private String sideText(){return "Я играю "+side.label()+" · сменить";}
     private String compactSideText(){return side==PlayerSide.WHITE?"♙ Белые ⇄":"♟ Чёрные ⇄";}
     private void sideButtonText(){sideButton.setText(sideText());quickSide.setText(compactSideText());quickSide.setContentDescription("Ты играешь "+side.label()+". Нажми, чтобы играть "+side.opposite().label());}
@@ -94,7 +103,7 @@ final class FloatingPanel {
     }
     void message(String text){if(closed||text.equals(lastMessage))return;lastMessage=text;compactSummary.setText(text.length()>92?text.substring(0,64)+"…\nНажми текст: подробности":text);status.setText(text);status.setTextColor(Ui.MUTED);score.setText("—");move.setText("Жду точную позицию");details.setText("Ты играешь "+side.label()+" · история сохраняется");variants.setText("");}
     void waiting(PlayerSide player,int plies){if(closed)return;lastMessage=null;compactSummary.setText("Ты играешь "+player.label()+"\nХод соперника · жду");status.setText("●  Ход соперника");status.setTextColor(Ui.MUTED);score.setText("—");move.setText("Жду ход соперника");details.setText("История: "+plies+" полуходов · подсказки только тебе");variants.setText("");}
-    void thinking(Position p){if(closed)return;lastMessage=null;compactSummary.setText("Твой ход · считаю…\nТы играешь "+side.label());status.setText("●  Позиция подтверждена");status.setTextColor(Ui.ACCENT);score.setText("…");move.setText("Stockfish 19 · считаю…");details.setText("Локальный расчёт без ограничения силы");variants.setText("");}
+    void thinking(Position p){if(closed)return;lastMessage=null;compactSummary.setText("Твой ход · считаю…\nТы играешь "+side.label());status.setText("●  Позиция подтверждена");status.setTextColor(Ui.ACCENT);score.setText("…");move.setText("Stockfish 19 · считаю…");details.setText("Сила: "+engineStrength().skill()+"/20 · локальный расчёт");variants.setText("");}
     void show(Position p,Analysis a,float confidence,boolean complete,int plies){
         if(closed||!side.ownsTurn(p))return;lastMessage=null;
         status.setText("●  "+(complete?"Готово":"Считаю")+" · совпадение "+Math.round(confidence*100)+"%");status.setTextColor(Ui.ACCENT);score.setText(a.score());Move best=a.bestMove();
@@ -115,5 +124,5 @@ final class FloatingPanel {
         clamp();wm.updateViewLayout(root,lp);root.post(this::updateBounds);
     }
     void setPaused(boolean value){paused=value;pauseText();}
-    void close(){if(closed)return;closed=true;try{wm.removeView(root);}catch(IllegalArgumentException ignored){}}
+    void close(){if(closed)return;closed=true;if(strengthDialog!=null){strengthDialog.dismiss();strengthDialog=null;}try{wm.removeView(root);}catch(IllegalArgumentException ignored){}}
 }

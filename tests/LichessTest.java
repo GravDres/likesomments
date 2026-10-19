@@ -12,8 +12,7 @@ public final class LichessTest {
     private static int[][] THEMES;private static String[] themeNames;
     static void check(boolean ok,String text){checks++;if(!ok)throw new AssertionError(text);}
     public static void main(String[] args)throws Exception{
-        atlas=ImageIO.read(Path.of("tests/fixtures/lichess/cburnett-atlas.png").toFile());
-        loadThemes();check(THEMES.length==25,"all fixed colour palettes from Lichess chessground catalog loaded");
+        setupFixture();check(THEMES.length==25,"all fixed colour palettes from Lichess chessground catalog loaded");
         check(ChessPlatform.fromPreference(null)==ChessPlatform.CHESS_COM,"legacy installations keep their original storage");
         check(ChessPlatform.fromPreference("lichess")==ChessPlatform.LICHESS,"Lichess preference restored");
         check(ChessPlatform.CHESS_COM.sessionFile().equals("last-game.hod"),"old game needs no destructive migration");
@@ -41,6 +40,10 @@ public final class LichessTest {
         layoutsAndRefresh(opening);
         System.out.println("PASS: "+checks+" Lichess assertions (Cburnett renders, "+THEMES.length+" palettes, both sides; not device screenshots or real textures)");
     }
+    static void setupFixture()throws Exception{
+        if(atlas!=null)return;
+        atlas=ImageIO.read(Path.of("tests/fixtures/lichess/cburnett-atlas.png").toFile());loadThemes();
+    }
     private static void loadThemes()throws Exception{
         String json=Files.readString(Path.of("tests/fixtures/lichess/palettes.json"));
         var pattern=java.util.regex.Pattern.compile("\\\"name\\\"\\s*:\\s*\\\"([^\\\"]+)\\\"\\s*,\\s*\\\"light\\\"\\s*:\\s*\\\"(0x[0-9a-f]+)\\\"\\s*,\\s*\\\"dark\\\"\\s*:\\s*\\\"(0x[0-9a-f]+)\\\"");
@@ -65,13 +68,33 @@ public final class LichessTest {
         int[] blank=new int[720*1440];Arrays.fill(blank,0xff161512);var searching=new AutoBoardSearch(false,"Lichess").inspect(blank,720,1440,null,null);check(searching.message().contains("Lichess")&&!searching.message().contains("Chess.com"),"Lichess messages name correct application");
     }
     static int[] render(Position p,int size,boolean flipped,int theme,boolean highlight,boolean coordinates,Move last){
+        return render(p,size,flipped,theme,highlight,coordinates,last,-1,0,0);
+    }
+    static int[] render(Position p,int size,boolean flipped,int theme,boolean highlight,boolean coordinates,Move last,int checkedSquare,float glowStrength,float blurFraction){
         BufferedImage image=new BufferedImage(size,size,BufferedImage.TYPE_INT_ARGB);Graphics2D g=image.createGraphics();g.setRenderingHint(RenderingHints.KEY_INTERPOLATION,RenderingHints.VALUE_INTERPOLATION_BICUBIC);g.setRenderingHint(RenderingHints.KEY_ANTIALIASING,RenderingHints.VALUE_ANTIALIAS_ON);
+        BufferedImage glow=checkedSquare<0?null:checkGlow(Math.round(size/8f),glowStrength,blurFraction);
         for(int display=0;display<64;display++){
             int row=display/8,col=display%8,x=Math.round(col*size/8f),y=Math.round(row*size/8f),x1=Math.round((col+1)*size/8f),y1=Math.round((row+1)*size/8f),logical=flipped?63-display:display;int bg=THEMES[theme][(row+col)&1];g.setColor(new Color(bg,true));g.fillRect(x,y,x1-x,y1-y);
             if(highlight&&last!=null&&(logical==last.from()||logical==last.to())){g.setColor(new Color(themeNames[theme].equals("green")?0x69009bc7:0x809cc700,true));g.fillRect(x,y,x1-x,y1-y);}
             if(coordinates){g.setFont(new Font(Font.SANS_SERIF,Font.BOLD,Math.max(8,size/72)));g.setColor(new Color(THEMES[theme][1-((row+col)&1)],true));if(col==0)g.drawString(Integer.toString(flipped?row+1:8-row),x+2,y+Math.max(9,size/72));if(row==7)g.drawString(Character.toString((char)((flipped?'h':'a')+(flipped?-col:col))),x1-Math.max(8,size/72),y1-2);}
+            if(logical==checkedSquare)g.drawImage(glow,x,y,x1-x,y1-y,null);
             char piece=p.at(logical);if(piece!='.'){int sprite=PIECES.indexOf(piece);g.drawImage(atlas,x,y,x1,y1,sprite*144,0,(sprite+1)*144,144,null);}
         }
         g.dispose();return image.getRGB(0,0,size,size,null,0,size);
+    }
+    /** Lichess radial red gradient behind the sprite, with a separable Gaussian blur. */
+    private static BufferedImage checkGlow(int size,float strength,float blurFraction){
+        BufferedImage image=new BufferedImage(size,size,BufferedImage.TYPE_INT_ARGB);Graphics2D g=image.createGraphics();
+        g.setPaint(new RadialGradientPaint(size/2f,size/2f,size*.6f,new float[]{0,.25f,.9f,1},new Color[]{Color.RED,new Color(231,0,0),new Color(169,0,0,0),new Color(158,0,0,0)}));g.fillRect(0,0,size,size);g.dispose();
+        // Blur premultiplied channels; transparent pixels must not darken the red.
+        float[][] channels=new float[2][size*size];
+        for(int y=0;y<size;y++)for(int x=0;x<size;x++){int i=y*size+x,p=image.getRGB(x,y);channels[0][i]=(p>>>24)/255f;channels[1][i]=(p>>16&255)*channels[0][i];}
+        if(blurFraction>0){
+            float sigma=size*blurFraction;int radius=(int)Math.ceil(sigma*3);float[] kernel=new float[radius*2+1];float sum=0;
+            for(int i=-radius;i<=radius;i++){float value=(float)Math.exp(-i*i/(2*sigma*sigma));kernel[i+radius]=value;sum+=value;}for(int i=0;i<kernel.length;i++)kernel[i]/=sum;
+            for(int c=0;c<channels.length;c++)for(boolean horizontal:new boolean[]{true,false}){float[] input=channels[c],output=new float[input.length];for(int y=0;y<size;y++)for(int x=0;x<size;x++)for(int d=-radius;d<=radius;d++){int xx=horizontal?x+d:x,yy=horizontal?y:y+d;if(xx>=0&&xx<size&&yy>=0&&yy<size)output[y*size+x]+=input[yy*size+xx]*kernel[d+radius];}channels[c]=output;}
+        }
+        for(int y=0;y<size;y++)for(int x=0;x<size;x++){int i=y*size+x,alpha=Math.round(channels[0][i]*strength*255),red=channels[0][i]>0?Math.round(channels[1][i]/channels[0][i]):0;image.setRGB(x,y,(alpha<<24)|(red<<16));}
+        return image;
     }
 }

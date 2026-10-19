@@ -1,6 +1,6 @@
 # Lichess vision test data
 
-These are rendered fixtures, not screenshots from the user's phone.
+The atlas and palette fixtures are rendered test data. `reported-check.png` is a real board-only crop from the user's report, documented separately below.
 
 - `cburnett/*.svg`: Colin M. L. Burnett's Cburnett artwork, GPL-2.0-or-later. The paths were extracted from the `PIECES` data in [python-chess SVG](https://github.com/niklasf/python-chess/blob/master/chess/svg.py), retrieved 2026-10-17. The same artwork family is Lichess's default piece set. [Lichess attribution](https://github.com/lichess-org/lila/blob/master/COPYING.md) identifies the Cburnett author and license. This distribution elects GPL v3; the full license is the repository's `COPYING`.
 - `cburnett-atlas.png`: derived transparent raster of those SVGs, Inkscape, 144 pixels per square, ordered `PNBRQKpnbrqk`. It is desktop test data and is not bundled in the Android APK. `scripts/render-lichess-fixture.py` regenerates it from the included SVGs.
@@ -11,3 +11,11 @@ These are rendered fixtures, not screenshots from the user's phone.
 Runtime learning is not a lookup of these palette values: it learns the actual starting board and rejects indistinguishable labels. The specially disguised Lichess sets, where different roles look identical, cannot be safely learned from an image alone. For initial phone validation, use Lichess's default Brown + Cburnett. A theme change needs a fresh starting-board calibration.
 
 Official app defaults and available boards: [board_preferences.dart](https://github.com/lichess-org/mobile/blob/main/lib/src/model/settings/board_preferences.dart). Piece catalog and asset definitions: [piece_set.dart](https://github.com/lichess-org/flutter-chessground/blob/main/lib/src/piece_set.dart). Android package: [mobile build.gradle.kts](https://github.com/lichess-org/mobile/blob/main/android/app/build.gradle.kts).
+
+## Reported check failure
+
+`reported-check.png` is a lossless 582×582 crop of the board in the supplied JPEG (rectangle x=0, y=401, width=582, height=582). It excludes player names, panel, clocks and account information. Black is at the bottom; after Qe2+ the black king e8 has a red background glow. The 0.12 recognizer read that king as a queen with no uncertain squares. `CheckHighlightTest` trains on an independently rendered starting board, then reads the untouched crop, so it does not learn the answer from the failing image.
+
+The test's preceding FEN is `r1bqk2r/pp3ppp/2n5/2bp4/5B2/2NP1N2/PPP3PP/R2QK2R w KQkq - 0 10`; applying d1e2 gives the photographed diagram. Castling rights, side to move and counters are explicit test inputs, not facts reconstructed from the screenshot. It checks the checking move, the legal c8e6 reply, illegal castling while checked, two-frame stability, and save/restore.
+
+Synthetic check backgrounds use the [official radial gradient and blur](https://github.com/lichess-org/flutter-chessground/blob/main/lib/src/widgets/highlight.dart), rendered behind Cburnett sprites with strengths 0.65/1 and blur sigma 0.08/0.18 of a square. They cover both colours and orientations on all 25 palette pairs, including light and dark king squares. These approximate desktop renders do not assert pixel equivalence to Flutter or other Android displays. Negative frames ensure a background alone cannot invent a king or overwrite a legal history; a separate recoloured render checks that red pieces without a glow retain their roles.

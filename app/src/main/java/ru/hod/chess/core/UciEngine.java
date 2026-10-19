@@ -12,22 +12,31 @@ public final class UciEngine implements ChessEngine {
     private final BufferedWriter input;
     private final BlockingQueue<String> output=new LinkedBlockingQueue<>(8192);
     private volatile boolean closed;
-    private int configuredThreads, configuredVariations;
+    private int configuredThreads, configuredVariations,configuredSkill=-1;
     public UciEngine(File executable,int threads) throws Exception {
         this(executable,threads,1);
     }
     public UciEngine(File executable,int threads,int variations) throws Exception {
+        this(executable,threads,variations,20);
+    }
+    public UciEngine(File executable,int threads,int variations,int skill) throws Exception {
         process=new ProcessBuilder(executable.getAbsolutePath()).redirectErrorStream(true).start();
         input=new BufferedWriter(new OutputStreamWriter(process.getOutputStream(),StandardCharsets.UTF_8));
         Thread reader=new Thread(()->{try(BufferedReader r=new BufferedReader(new InputStreamReader(process.getInputStream(),StandardCharsets.UTF_8))){String line;while((line=r.readLine())!=null&&!closed){if(!output.offer(line)){output.poll();output.offer(line);}}}catch(IOException ignored){}},"uci-output");reader.setDaemon(true);reader.start();
-        try {send("uci");await("uciok",8000);send("setoption name Skill Level value 20");send("setoption name UCI_LimitStrength value false");configure(threads,variations);newGame();}catch(Exception e){close();throw e;}
+        try {send("uci");await("uciok",8000);send("setoption name UCI_LimitStrength value false");configure(threads,variations,skill);newGame();}catch(Exception e){close();throw e;}
     }
-    public String name(){return "Stockfish 19";}
+    public String name(){return configuredSkill<20?"Stockfish 19 · уровень "+configuredSkill+"/20":"Stockfish 19";}
     public synchronized void configure(int threads,int variations)throws Exception{
-        int t=Math.max(1,Math.min(4,threads)),v=variations==3?3:1;
-        if(t==configuredThreads&&v==configuredVariations)return;
+        configure(threads,variations,configuredSkill<0?20:configuredSkill);
+    }
+    public synchronized void configure(int threads,int variations,int skill)throws Exception{
+        int t=Math.max(1,Math.min(4,threads)),v=variations==3?3:1,s=Math.max(0,Math.min(20,skill));
+        if(t==configuredThreads&&v==configuredVariations&&s==configuredSkill)return;
         if(t!=configuredThreads){send("setoption name Threads value "+t);send("setoption name Hash value 256");}
-        send("setoption name MultiPV value "+v);send("isready");await("readyok",8000);configuredThreads=t;configuredVariations=v;
+        if(s!=configuredSkill)send("setoption name Skill Level value "+s);
+        // Skill selection uses at least four root candidates. Request their PVs
+        // so a selected weaker bestmove keeps its OWN score and legal line.
+        send("setoption name MultiPV value "+(s<20?4:v));send("isready");await("readyok",8000);configuredThreads=t;configuredVariations=v;configuredSkill=s;
     }
     /** Called only for a different game; normal moves retain the engine's search table. */
     public synchronized void newGame()throws Exception{send("ucinewgame");send("isready");await("readyok",8000);}
@@ -65,7 +74,7 @@ public final class UciEngine implements ChessEngine {
                         Move best;
                         try{best=Move.parse(finalTokens[1]);}catch(IllegalArgumentException e){throw new IOException("Некорректный итоговый ход",e);}
                         if(!p.legalMoves().contains(best))throw new IOException("Итоговый ход недопустим в текущей позиции");
-                        Analysis chosen=published!=null&&best.equals(published.bestMove())?published:knownMoves.get(best);
+                        Analysis chosen=configuredSkill==20&&published!=null&&best.equals(published.bestMove())?published:knownMoves.get(best);
                         if(chosen==null)throw new IOException("Для итогового хода нет подтверждённого варианта");
                         progress.accept(chosen);
                     }
@@ -78,7 +87,7 @@ public final class UciEngine implements ChessEngine {
                     if(pv.isEmpty())continue;
                     knownMoves.put(pv.get(0),new Analysis(name(),d,n,cp,mate,List.of(new Analysis.Line(1,cp,mate,List.copyOf(pv)))));
                     if(d>depth){lines.clear();depth=d;}if(d<depth)continue;nodes=n;lines.put(rank,new Analysis.Line(rank,cp,mate,List.copyOf(pv)));
-                    if(lines.containsKey(1)){Analysis.Line first=lines.get(1);published=new Analysis(name(),depth,nodes,first.centipawns(),first.mate(),List.copyOf(lines.values()));progress.accept(published);}
+                    if(lines.containsKey(1)){Analysis.Line first=lines.get(1);published=new Analysis(name(),depth,nodes,first.centipawns(),first.mate(),List.copyOf(lines.values()));if(configuredSkill==20)progress.accept(published);}
                 }catch(IllegalArgumentException ignored){}
             }
         }catch(InterruptedException e){Thread.interrupted();send("stop");awaitBestMove();return;}

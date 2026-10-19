@@ -28,7 +28,7 @@ jobs:
           gradle-version: '8.13'
       - name: Install SDK 36 and NDK r28c
         run: sdkmanager --install 'platforms;android-36' 'build-tools;36.0.0' 'ndk;28.2.13676358'
-      - name: Test rules, Chess.com, Lichess vision and root transport
+      - name: Test rules, engine strength, check highlights, vision and root transport
         run: bash scripts/test-core.sh
       - name: Build official Stockfish 19 + NNUE for ARM64
         run: |

@@ -90,9 +90,23 @@ public final class BoardVision {
         int[] rs=new int[16],gs=new int[16],bs=new int[16];int k=0;
         for(float dy:new float[]{.10f,.18f,.82f,.90f})for(float dx:new float[]{.10f,.18f,.82f,.90f}){int px=pixels[(y0+Math.round(dy*cell))*w+x0+Math.round(dx*cell)];rs[k]=(px>>16)&255;gs[k]=(px>>8)&255;bs[k]=px&255;k++;}
         Arrays.sort(rs);Arrays.sort(gs);Arrays.sort(bs);int br=rs[8],bg=gs[8],bb=bs[8];float[] mask=new float[N*N],lightness=interiorTone?new float[N*N]:null;float ink=0,occupied=0;int foreground=0;
+        boolean[] redBackground=new boolean[N*N];int redCount=0,redForeground=0,redLeft=0,redRight=0,redTop=0;float redMass=0,redInk=0;
         for(int y=0;y<N;y++)for(int x=0;x<N;x++){
             int xx=x0+Math.round((.12f+(x+.5f)/N*.76f)*cell),yy=y0+Math.round((.08f+(y+.5f)/N*.84f)*cell);int px=pixels[yy*w+xx];int r=(px>>16)&255,g=(px>>8)&255,b=px&255;
             float dist=(r-br)*(r-br)+(g-bg)*(g-bg)+(b-bb)*(b-bb);float m=Math.max(0f,Math.min(1f,(dist-900f)/2200f));mask[y*N+x]=m;occupied+=m;if(m>.12f)foreground++;float luma=(.2126f*r+.7152f*g+.0722f*b)/255f;ink+=m*luma;if(lightness!=null)lightness[y*N+x]=luma;
+            // A check glow is painted BEHIND the piece. Its green and blue
+            // channels fade together towards red; neutral piece ink does not.
+            if(isRedBackground(r,g,b,br,bg,bb)){
+                redBackground[y*N+x]=true;redCount++;redMass+=m;redInk+=m*luma;
+                if(m>.12f)redForeground++;
+                if(x<4)redLeft++;if(x>=N-4)redRight++;if(y<2)redTop++;
+            }
+        }
+        // Require evidence outside the piece on both sides and above it. A red
+        // piece alone must not be erased or interpreted as a checked king.
+        if(redCount>=12&&redLeft>=3&&redRight>=3&&redTop>=4){
+            for(int i=0;i<mask.length;i++)if(redBackground[i])mask[i]=0;
+            occupied=Math.max(0,occupied-redMass);ink=Math.max(0,ink-redInk);foreground-=redForeground;
         }
         Feature feature=new Feature(mask,occupied>0?ink/occupied:0,foreground/(float)(N*N));
         if(!interiorTone)return feature;
@@ -100,6 +114,13 @@ public final class BoardVision {
         // contrasting pixels sees its black outline and confuses it with a black piece.
         float tone=0,mass=0;for(int i=0;i<N*N;i++){float filled=feature.silhouette()[i];tone+=filled*lightness[i];mass+=filled;}
         return new Feature(mask,mass>0?tone/mass:feature.ink(),feature.occupancy(),feature.silhouette(),feature.normalized());
+    }
+    private static boolean isRedBackground(int r,int g,int b,int br,int bg,int bb){
+        if(bg+bb<40)return false;
+        float scale=(g+b)/(float)(bg+bb);
+        if(scale<=.04f||scale>=.97f)return false;
+        float red=(r-br*scale)/(1f-scale);
+        return red>155f&&red<300f&&Math.abs(g-bg*scale)+Math.abs(b-bb*scale)<14f;
     }
     private static float[] canonical(float[] mask){
         boolean[] expanded=new boolean[N*N],outside=new boolean[N*N];int[] queue=new int[N*N];int head=0,tail=0;

@@ -25,6 +25,7 @@ public final class CaptureService extends Service {
     private static final String STOP="ru.hod.chess.STOP";
     public static final String SIDE_CHANGED="ru.hod.chess.SIDE_CHANGED";
     public static final String PLATFORM_CHANGED="ru.hod.chess.PLATFORM_CHANGED";
+    public static final String STRENGTH_CHANGED="ru.hod.chess.STRENGTH_CHANGED";
     private final Handler main=new Handler(Looper.getMainLooper());
     private HandlerThread captureThread;private Handler capture;
     private volatile MediaProjection projection;private volatile VirtualDisplay display;private volatile ImageReader reader;
@@ -67,6 +68,7 @@ public final class CaptureService extends Service {
             if(!initialized){initialize();if(intent==null)captureProblem="Окно восстановлено после остановки · нажми ↻ для захвата";}
             if(intent!=null&&SIDE_CHANGED.equals(intent.getAction()))changeSide(prefs().getBoolean("playerWhite",true)?PlayerSide.WHITE:PlayerSide.BLACK);
             if(intent!=null&&PLATFORM_CHANGED.equals(intent.getAction()))changePlatform();
+            if(intent!=null&&STRENGTH_CHANGED.equals(intent.getAction()))changeStrength(engineStrength());
             if(intent!=null&&START_ROOT.equals(intent.getAction()))startRootCapture(intent.getBooleanExtra("refresh",false));
             else if(intent==null&&prefs().getBoolean("rootCapture",false))startRootCapture(false);
             else if(intent!=null&&intent.hasExtra("permission"))startCapture(intent);
@@ -100,6 +102,7 @@ public final class CaptureService extends Service {
             public void verify(){recoverAssistant();}
             public void review(){if(capturing)selectPosition();else requestCapture();}
             public void side(PlayerSide side){changeSide(side);}public void newGame(){startNewGame();}
+            public void strength(EngineStrength value){changeStrength(value);}
             public void pause(boolean value){setPaused(value);}
             public void arrows(boolean value){prefs().edit().putBoolean("arrows",value).apply();if(!value)hideArrow();}
             public void deeper(){Position p=analyzedPosition;if(!capturing||paused||p==null||!playerSide.ownsTurn(p)){Toast.makeText(CaptureService.this,"Дождись своего хода и подтверждённой позиции",Toast.LENGTH_SHORT).show();return;}beginAnalysis(p,currentConfidence,epoch.get(),8000);}
@@ -307,6 +310,13 @@ public final class CaptureService extends Service {
         try{sessionStore.archive(tracker,vision);}catch(java.io.IOException e){Log.e("HodCapture","Previous game backup failed",e);main.post(()->{if(!destroyed)Toast.makeText(this,"Не удалось сохранить копию прошлой партии",Toast.LENGTH_SHORT).show();});}
     }
     private int engineThreads(){return Math.max(1,Math.min(4,Runtime.getRuntime().availableProcessors()-1));}
+    private EngineStrength engineStrength(){return EngineStrength.fromPreference(prefs().getInt(EngineStrength.PREFERENCE,EngineStrength.DEFAULT_SKILL));}
+    private synchronized void changeStrength(EngineStrength value){
+        if(destroyed)return;
+        prefs().edit().putInt(EngineStrength.PREFERENCE,value.skill()).apply();panel.setStrength(value);invalidateSearch();
+        if(confirmed!=null&&boardVerified&&!paused){Position p=confirmed.position();if(playerSide.ownsTurn(p))beginAnalysis(p,currentConfidence,epoch.get());else panel.waiting(playerSide,confirmed.moves().size());}
+        else panel.message("Сила: "+value.skill()+"/20 · проверяю доску");
+    }
     private synchronized void changePlatform(){
         ChessPlatform selected=ChessPlatform.fromPreference(prefs().getString("chessPlatform",null));if(selected==platform)return;
         // Every recognition/save operation holds this monitor before committing. Invalidate
@@ -345,7 +355,7 @@ public final class CaptureService extends Service {
                 if(token!=searchEpoch.get()||destroyed)return;
                 int threads=engineThreads();
                 if(engine==null)engine=EngineFactory.create(this,threads);
-                if(engine instanceof UciEngine nativeEngine)nativeEngine.configure(threads,1);
+                if(engine instanceof UciEngine nativeEngine)nativeEngine.configure(threads,1,engineStrength().skill());
                 if(token!=searchEpoch.get())return;
                 java.util.function.Consumer<Analysis> report=a->{synchronized(CaptureService.this){if(token!=searchEpoch.get()||gen!=epoch.get()||destroyed||paused||!playerSide.ownsTurn(p))return;lastAnalysis=a;long now=SystemClock.elapsedRealtime();if(now-lastUiReport<180)return;lastUiReport=now;}main.post(()->{if(panel!=null&&token==searchEpoch.get()&&gen==epoch.get()&&!paused&&boardVerified&&playerSide.ownsTurn(p))panel.show(p,a,confidence,false,snapshot.moves().size());});};
                 if(engine instanceof UciEngine nativeEngine)nativeEngine.analyzeGame(snapshot.initial(),p,snapshot.moves(),millis,report);else engine.analyze(p,millis,report);
