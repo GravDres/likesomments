@@ -1,8 +1,10 @@
-# ХОД 0.23 · Caissa 2.0 · Android ARM64
+# ХОД 0.24 · Caissa 2.0 · Android ARM64
 
 Локальный шахматный помощник для тренировок и разбора позиций: автоматическое распознавание доски, история партии, стрелка и устойчивое плавающее окно. Android 10–16; ARM64. Поддерживаются стандартные шахматы и доски официальных приложений Chess.com и Lichess.
 
 ## Что изменилось
+
+В 0.24 исправлен отказ клиента на законном `bestmove`, если Caissa не прислала соответствующий `info ... pv ...`. Ход по-прежнему выбирает Caissa. Клиент проверяет его законность и принимает без оценки и глубины; интерфейс показывает «оценка не передана» и «—». Оценка и варианты от другого хода не переносятся. При наличии подходящего проверенного PV оценка сохраняется. Незаконные итоговые ходы по-прежнему отклоняются. Проверки настоящей Caissa и release lint остаются обязательными в Actions.
 
 - Единственный игровой движок — **Caissa 2.0** с официальной нейросетью `eval-ml-8-152B-spsa.pnn`.
 - Stockfish, Maia, ONNX Runtime и Tooken API удалены из приложения и сборки. У APK нет разрешения `INTERNET`.
@@ -31,14 +33,14 @@
 
 ## Обновление из ZIP через Termux
 
-Скачайте `Hod-v0.23-Caissa.zip` в Downloads. Важно выполнить очистку: распаковка ZIP сама не удаляет файлы прежних версий.
+Скачайте `Hod-v0.24-Caissa-UCI-Fix.zip` в Downloads. Важно выполнить очистку: распаковка ZIP сама не удаляет файлы прежних версий.
 
 ```bash
 cd "$HOME/hod-likesomments" &&
-unzip -o "$HOME/storage/downloads/Hod-v0.23-Caissa.zip" &&
+unzip -o "$HOME/storage/downloads/Hod-v0.24-Caissa-UCI-Fix.zip" &&
 python3 scripts/clean-legacy.py &&
 git add -A &&
-git commit -m "v0.23: replace legacy engines with offline Caissa" &&
+git commit -m "v0.24: accept legal Caissa bestmove without PV" &&
 git push origin main
 ```
 

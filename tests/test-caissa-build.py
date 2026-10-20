@@ -187,7 +187,7 @@ class CaissaBuildTest(unittest.TestCase):
         self.assertEqual((ROOT / 'config/signing-certificate.sha256').read_text().strip(), '5063e2ff5159bef0bbe90158f6c5037c1959e826097338fe37db55e13e47dc14')
         gradle = (ROOT / 'app/build.gradle').read_text()
         self.assertNotIn("implementation 'com.microsoft.onnxruntime", gradle)
-        self.assertIn('versionCode 23', gradle)
+        self.assertIn('versionCode 24', gradle)
         self.assertIn('signingConfig signingConfigs.persistent', gradle)
 
 

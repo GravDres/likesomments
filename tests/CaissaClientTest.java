@@ -25,7 +25,7 @@ public final class CaissaClientTest {
     private static Position play(Position p,String...moves){for(String move:moves)p=p.play(Move.parse(move));return p;}
     public static void main(String[] args)throws Exception{
         try{
-            settings();protocol();specialMoves();lifecycle();failureRecovery();modelStore();
+            settings();protocol();moveOnlyResults();specialMoves();lifecycle();failureRecovery();modelStore();
             System.out.println("PASS: "+count+" Caissa client assertions (simulated protocol, not a strength benchmark)");
         }finally{try(var paths=Files.walk(work)){for(Path path:paths.sorted(Comparator.reverseOrder()).toList())Files.deleteIfExists(path);}}
     }
@@ -72,8 +72,48 @@ public final class CaissaClientTest {
             boolean failed=false;try(UciEngine ignored=engine(mode,work.resolve(mode+".log"))){}catch(IOException expected){failed=true;}
             check(failed,"fail closed for "+mode);
         }
-        for(String mode:new String[]{"illegal","unreported","crash"}){
+        for(String mode:new String[]{"illegal","nullmove","none","crash"}){
             try(UciEngine engine=engine(mode,work.resolve(mode+".log"))){boolean failed=false;try{analyze(engine,Position.start());}catch(IOException expected){failed=true;}check(failed,"reject "+mode);}
+        }
+    }
+    private static void noEvaluation(Analysis answer,String message){
+        check(answer.bestMove()!=null,message+": root move retained");
+        check(!answer.hasSearchEvaluation()&&answer.depth()==-1,message+": missing evaluation explicitly marked");
+        check(answer.score().equals("—")&&answer.mate()==null,message+": no invented score or mate");
+        check(answer.nodes()==0,message+": no unrelated node count");
+        check(answer.lines().size()==1&&answer.lines().get(0).moves().size()==1,message+": no unrelated variation retained");
+    }
+    private static void moveOnlyResults()throws Exception{
+        Position start=Position.start(),black=play(start,"e2e4");
+        for(String mode:new String[]{"bestmove-only","bound-only","malformed-only","unreported"}){
+            try(UciEngine engine=engine(mode,work.resolve(mode+".log"))){
+                Analysis white=analyze(engine,start);noEvaluation(white,mode);
+                check(start.legalMoves().contains(white.bestMove()),"legal final move without scored PV accepted");
+                if(mode.equals("unreported")){
+                    check(white.bestMove().uci().equals("g1h3"),"authoritative move replaces earlier scored e4");
+                    check(white.centipawns()!=35,"old e4 score does not leak into g1h3");
+                }else{
+                    Analysis next=analyze(engine,black);noEvaluation(next,mode+" Black");
+                    check(next.bestMove().uci().equals("e7e5"),"same process continues for Black after move-only result");
+                }
+                check(engine.isRunning(),"missing info does not terminate Caissa");
+                engine.newGame();noEvaluation(analyze(engine,start),mode+" new game");
+            }
+        }
+        String[][] positions={
+            {"6k1/5ppp/8/8/8/8/5PPP/3Q2K1 w - - 0 1","d1d8"},
+            {"7k/8/8/8/8/8/4q3/4K3 w - - 0 1","e1e2"},
+            {"4k3/4Q3/8/8/8/8/8/7K b - - 0 1","e8e7"},
+            {"r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 10","e1g1"},
+            {"7k/8/8/3pP3/8/8/8/7K w - d6 0 10","e5d6"},
+            {"7k/P7/8/8/8/8/8/7K w - - 0 1","a7a8q"}};
+        int i=0;for(String[] test:positions){
+            Position p=Position.fromFen(test[0]);
+            try(UciEngine engine=engine("bestmove-only:"+test[1],work.resolve("move-only-"+i+++".log"))){
+                Analysis answer=analyze(engine,p);noEvaluation(answer,"special move-only");
+                check(answer.bestMove().uci().equals(test[1])&&p.legalMoves().contains(answer.bestMove()),"exact special bestmove retained");
+                check(!p.play(answer.bestMove()).inCheck(p.white),"move-only answer obeys king safety");
+            }
         }
     }
     private static void specialMoves()throws Exception{

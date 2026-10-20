@@ -9,7 +9,9 @@ public final class CaissaNativeTest {
     private static int checks;
     private static void check(boolean condition,String message){checks++;if(!condition)throw new AssertionError(message);}
     private static Analysis analyze(UciEngine engine,Position p,int millis)throws Exception{
-        AtomicReference<Analysis> result=new AtomicReference<>();engine.analyze(p,millis,result::set);
+        AtomicReference<Analysis> result=new AtomicReference<>();
+        try{engine.analyze(p,millis,result::set);}
+        catch(IOException failure){throw new IOException("Native Caissa test failed for FEN: "+p.fen(),failure);}
         check(result.get()!=null,"actual engine returned analysis");
         check(p.legalMoves().contains(result.get().bestMove()),"actual bestmove is legal");return result.get();
     }
@@ -28,7 +30,14 @@ public final class CaissaNativeTest {
             Move move=analyze(engine,mate,1500).bestMove();Position after=mate.play(move);
             check(after.inCheck(after.white)&&after.legalMoves().isEmpty(),"real Caissa finds mate in one");
             Position check=Position.fromFen("7k/8/8/8/8/8/4q3/4K3 w - - 0 1");
-            check(analyze(engine,check,300).bestMove().uci().equals("e1e2"),"real Caissa captures checking queen");
+            check(check.legalMoves().size()==1,"forced evasion fixture has one legal move");
+            Analysis forced=analyze(engine,check,300);
+            check(forced.bestMove().uci().equals("e1e2"),"real Caissa captures checking queen");
+            check(!forced.hasSearchEvaluation()&&forced.score().equals("—"),"real immediate bestmove needs no scored PV");
+            Position blackForced=Position.fromFen("4k3/4Q3/8/8/8/8/8/7K b - - 0 1");
+            check(blackForced.legalMoves().size()==1,"black forced evasion fixture has one legal move");
+            Analysis blackAnswer=analyze(engine,blackForced,300);
+            check(blackAnswer.bestMove().uci().equals("e8e7")&&!blackAnswer.hasSearchEvaluation(),"real move-only response works for Black");
             for(String fen:new String[]{"r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 10","7k/8/8/3pP3/8/8/8/7K w - d6 0 10","7k/P7/8/8/8/8/8/7K w - - 0 1"})analyze(engine,Position.fromFen(fen),300);
             ExecutorService queue=Executors.newSingleThreadExecutor();CountDownLatch started=new CountDownLatch(1);
             try{

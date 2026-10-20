@@ -105,7 +105,9 @@ public final class UciEngine implements HistoryEngine {
                     try{best=Move.parse(tokens[1]);}catch(IllegalArgumentException|IndexOutOfBoundsException bad){throw new IOException("Caissa вернула неверный ход",bad);}
                     if(!legal.contains(best))throw new IOException("Ход Caissa недопустим в текущей позиции");
                     Analysis answer=published!=null&&best.equals(published.bestMove())?published:known.get(best);
-                    if(answer==null)throw new IOException("Нет подтверждённого варианта для итогового хода Caissa");
+                    // UCI info is optional. Caissa can return immediately without a scored PV.
+                    // Keep its legal final move, but never attach another move's score or line.
+                    if(answer==null)answer=Analysis.moveOnly(name(),best);
                     if(Thread.currentThread().isInterrupted())throw new InterruptedException();
                     progress.accept(answer);return;
                 }
