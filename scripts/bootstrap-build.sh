@@ -7,6 +7,7 @@ if [[ -z "${HOD_SIGNING_STORE:-}" || -z "${HOD_KEYSTORE_PASSWORD:-}" || ! -f "${
     echo 'Set HOD_SIGNING_STORE to your permanent hod-update.p12 and HOD_KEYSTORE_PASSWORD before building. See docs/SIGNING.md.' >&2
     exit 1
 fi
+python3 scripts/clean-legacy.py
 mkdir -p tools artifacts
 download() { if [ ! -s "$2" ]; then curl --fail --location --retry 2 --connect-timeout 15 --max-time 600 "$1" -o "$2.part"; mv "$2.part" "$2"; fi; }
 if [ ! -x tools/jdk/bin/javac ]; then
@@ -28,20 +29,20 @@ sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
 set +o pipefail
 yes | "$sdkmanager" --licenses > artifacts/sdk-licenses.log
 set -o pipefail
-"$sdkmanager" 'platforms;android-36' 'build-tools;36.0.0' 'ndk;28.2.13676358'
+"$sdkmanager" 'platforms;android-36' 'build-tools;36.0.0' 'ndk;28.2.13676358' 'cmake;3.31.6'
 export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.2.13676358"
+export PATH="$ANDROID_HOME/cmake/3.31.6/bin:$PATH"
 if [ ! -x tools/gradle-8.13/bin/gradle ]; then
     download 'https://services.gradle.org/distributions/gradle-8.13-bin.zip' tools/gradle.zip
     unzip -q -o tools/gradle.zip -d tools
 fi
 "$task_root/tools/gradle-8.13/bin/gradle" --no-daemon -PcompactOnly :app:lintVitalRelease
 bash scripts/test-core.sh
+python3 tests/test-caissa-build.py
 python3 tests/test-signing.py
-"$task_root/tools/gradle-8.13/bin/gradle" --no-daemon -PcompactOnly :app:testDebugUnitTest
-bash scripts/build-maia.sh
-bash scripts/build-stockfish.sh
+bash scripts/build-caissa.sh
 "$task_root/tools/gradle-8.13/bin/gradle" --no-daemon :app:assembleRelease
 python3 scripts/verify-apk.py app/build/outputs/apk/release/app-release.apk
 python3 scripts/verify-signature.py app/build/outputs/apk/release/app-release.apk --apksigner "$ANDROID_HOME/build-tools/36.0.0/apksigner"
-cp app/build/outputs/apk/release/app-release.apk artifacts/Hod-0.22-arm64.apk
-echo "APK: $task_root/artifacts/Hod-0.22-arm64.apk"
+cp app/build/outputs/apk/release/app-release.apk artifacts/Hod-0.23-arm64.apk
+echo "APK: $task_root/artifacts/Hod-0.23-arm64.apk"

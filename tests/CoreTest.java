@@ -174,7 +174,7 @@ public final class CoreTest {
     static int[] withArrow(int[] clean,int width,ArrowGeometry shape){int[] image=clean.clone();for(int y=0;y<image.length/width;y++)for(int x=0;x<width;x++)if(shape.covers(x,y,0))image[y*width+x]=0xffc2ef67;return image;}
     static void uciTests()throws Exception{
         java.io.File fixture=new java.io.File("tests/fake-uci.sh");fixture.setExecutable(true);
-        try(UciEngine engine=new UciEngine(fixture,2)){
+        try(UciEngine engine=new UciEngine(fixture,new java.io.File("tests/caissa-fixture.pnn"),2,1,128)){
             AtomicReference<Analysis> result=new AtomicReference<>();engine.analyze(Position.start(),120,result::set);
             check(result.get().bestMove().uci().equals("e2e4"),"UCI valid move parsed");check(result.get().depth()==8&&result.get().centipawns()==35,"invalid UCI variation rejected");
             result.set(null);engine.analyze(play(Position.start(),"e2e4"),120,result::set);check(result.get().centipawns()==-35,"UCI score normalized for Black");

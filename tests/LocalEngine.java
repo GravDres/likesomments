@@ -3,7 +3,7 @@ package ru.hod.chess.core;
 import java.util.*;
 import java.util.function.Consumer;
 
-/** Dependency-free fallback. It is deliberately identified separately from Stockfish. */
+/** Small test-only search for rule regressions. Excluded from the Android source set and APK. */
 public final class LocalEngine implements ChessEngine {
     private long deadline,nodes;
     private boolean timeout;

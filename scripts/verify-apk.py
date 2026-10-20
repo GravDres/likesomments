@@ -1,61 +1,60 @@
 #!/usr/bin/env python3
-"""Verify that the distributed APK really contains the ARM64 NNUE engine."""
-import pathlib
+"""Verify Caissa-only APK, network integrity, ARM64, native alignment and removed components."""
+import hashlib
+import json
+from pathlib import Path
 import struct
 import sys
 import zipfile
-import hashlib
-import json
 
-apk = pathlib.Path(sys.argv[1])
-with zipfile.ZipFile(apk) as archive:
-    assert archive.testzip() is None, 'Corrupt APK'
-    binary = archive.read('lib/arm64-v8a/libstockfish.so')
-    assert binary[:4] == b'\x7fELF', 'Engine is not ELF'
-    assert binary[4] == 2, 'Engine is not 64 bit'
-    assert struct.unpack_from('<H', binary, 18)[0] == 183, 'Engine is not AArch64'
-    networks = list(pathlib.Path('third_party/Stockfish-sf_19/src').glob('*.nnue'))
-    assert networks, 'NNUE source files missing: cannot verify embedding'
-    network_bytes = sum(p.stat().st_size for p in networks)
-    assert network_bytes > 1_000_000, 'NNUE networks unexpectedly small'
-    assert len(binary) >= network_bytes, 'Engine too small to contain the downloaded NNUE network'
-    # The Android 16 device can use 16 KiB pages. All load segments must support it.
+
+def elf(binary, name):
+    assert binary[:4] == b'\x7fELF' and binary[4] == 2 and binary[5] == 1, f'Not ELF64 LE: {name}'
+    assert struct.unpack_from('<H', binary, 18)[0] == 183, f'Not AArch64: {name}'
     offset = struct.unpack_from('<Q', binary, 32)[0]
     size, count = struct.unpack_from('<HH', binary, 54)
+    load = 0
     for i in range(count):
-        program = offset + i * size
-        if struct.unpack_from('<I', binary, program)[0] == 1:
-            alignment = struct.unpack_from('<Q', binary, program + 48)[0]
-            assert alignment >= 16384, f'ELF LOAD alignment too small: {alignment}'
-    for name in ('assets/licenses/Stockfish-GPL-3.txt', 'assets/licenses/Stockfish-AUTHORS.txt', 'assets/licenses/Stockfish-SOURCE.txt'):
-        assert len(archive.read(name)) > 20, f'Missing attribution: {name}'
-    assert 'AndroidManifest.xml' in archive.namelist()
-    for name in archive.namelist():
-        if not (name.startswith('lib/') and name.endswith('.so')):
-            continue
-        assert name.startswith('lib/arm64-v8a/'), f'Unexpected ABI: {name}'
-        library=archive.read(name)
-        assert library[:4]==b'\x7fELF' and library[4]==2 and struct.unpack_from('<H',library,18)[0]==183, f'Not ARM64: {name}'
-        phoff=struct.unpack_from('<Q',library,32)[0]
-        phsize,phcount=struct.unpack_from('<HH',library,54)
-        for i in range(phcount):
-            entry=phoff+i*phsize
-            if struct.unpack_from('<I',library,entry)[0]==1:
-                assert struct.unpack_from('<Q',library,entry+48)[0]>=16384, f'16 KiB page alignment missing: {name}'
-    assert any('onnxruntime' in n and n.endswith('.so') for n in archive.namelist()), 'ONNX Runtime missing'
-    manifest=dict(line.split('=',1) for line in archive.read('assets/maia/models.properties').decode().splitlines() if '=' in line)
-    report=json.loads(archive.read('assets/maia/provenance.json'))
-    assert len(report['upstream'])==40 and len(report['models'])==2, 'Maia provenance missing'
-    for size in ('5m','23m'):
-        name=f'maia3-{size}.onnx';model=archive.read('assets/maia/'+name)
-        assert len(model)>1_000_000, f'Model is not a full network: {name}'
-        assert hashlib.sha256(model).hexdigest()==manifest[name+'.sha256'], f'Model hash mismatch: {name}'
-        parity=next(m for m in report['models'] if m['name']==name)
-        assert parity['sha256']==manifest[name+'.sha256'] and parity['max_output_error']<=1e-4 and parity['parity_cases']>=32, f'Unverified export: {name}'
-    for name in ('Maia3-AGPL-3.txt','Maia3-SOURCE.txt','ONNXRuntime-LICENSE.txt','ONNXRuntime-ThirdPartyNotices.txt'):
-        assert len(archive.read('assets/licenses/'+name))>20, f'Missing license: {name}'
-    dex = [archive.read(name) for name in archive.namelist() if name.startswith('classes') and name.endswith('.dex')]
-    for entry in (b'Lru/hod/chess/RootCaptureMain;', b'Lru/hod/chess/core/RootCaptureWire;', b'Lru/hod/chess/core/ChessPlatform;', b'Lru/hod/chess/core/EngineStrength;', b'Lru/hod/chess/MaiaEngine;', b'Lru/hod/chess/core/MaiaPolicy;', b'Lru/hod/chess/core/TacticalMaiaEngine;', b'Lru/hod/chess/core/PanelPlacement;', b'Lru/hod/chess/core/ApiEngine;', b'Lru/hod/chess/TookenTransport;', b'Lru/hod/chess/ApiKeyStore;', b'Lru/hod/chess/core/ApiChessFacts;', b'Lru/hod/chess/core/ApiModelBenchmark;'):
-        assert any(entry in data for data in dex), f'Missing application entry point: {entry}'
-    assert any(b'org.lichess.mobileV2' in data for data in dex), 'Official Lichess app package missing'
-print(f'PASS: {apk.name}, ARM64 Stockfish + NNUE ({len(binary):,} bytes), Maia-3 5M/23M + hashes + export parity, 16 KiB alignment of all native libraries, licenses and capture')
+        entry = offset + i * size
+        if struct.unpack_from('<I', binary, entry)[0] == 1:
+            load += 1
+            assert struct.unpack_from('<Q', binary, entry + 48)[0] >= 16384, f'16 KiB LOAD alignment missing: {name}'
+    assert load, f'No ELF load segments: {name}'
+
+
+def verify(apk):
+    with zipfile.ZipFile(apk) as archive:
+        assert archive.testzip() is None, 'Corrupt APK'
+        names = archive.namelist()
+        libraries = [n for n in names if n.startswith('lib/') and n.endswith('.so')]
+        assert libraries == ['lib/arm64-v8a/libcaissa.so'], f'Unexpected native libraries: {libraries}'
+        binary = archive.read(libraries[0])
+        elf(binary, libraries[0])
+        report = json.loads(archive.read('assets/caissa/provenance.json'))
+        assert report['version'] == '2.0' and report['commit'] == 'bb725799e9b19ebdaa0d584f5433fc1c3019e349', 'Wrong Caissa release'
+        assert report['abi'] == 'arm64-v8a' and report['target'] == 'aarch64-neon'
+        assert hashlib.sha256(binary).hexdigest() == report['binary.sha256'], 'Engine binary mismatch'
+        name = report['network']
+        assert name == 'eval-ml-8-152B-spsa.pnn', 'Wrong neural network'
+        network = archive.read('assets/caissa/' + name)
+        assert len(network) == report['network.bytes'] and len(network) > 1_000_000, 'Network size mismatch'
+        assert hashlib.sha256(network).hexdigest() == report['network.sha256'], 'Network hash mismatch'
+        properties = dict(line.split('=', 1) for line in archive.read('assets/caissa/engine.properties').decode().splitlines() if '=' in line)
+        for key in ('version', 'network', 'network.sha256', 'commit', 'binary.sha256'):
+            assert properties[key] == report[key], f'Engine manifest mismatch: {key}'
+        for license_name in ('Caissa-MIT.txt', 'Caissa-SOURCE.txt'):
+            assert len(archive.read('assets/licenses/' + license_name)) > 20, f'Missing license: {license_name}'
+        assert not any('stockfish' in n.lower() or 'onnxruntime' in n.lower() or n.startswith('assets/maia/') for n in names), 'Retired engine asset leaked'
+        manifest = archive.read('AndroidManifest.xml')
+        assert b'android.permission.INTERNET' not in manifest and 'android.permission.INTERNET'.encode('utf-16le') not in manifest, 'Offline app must not request INTERNET'
+        dex = b''.join(archive.read(n) for n in names if n.startswith('classes') and n.endswith('.dex'))
+        for entry in (b'Lru/hod/chess/RootCaptureMain;', b'Lru/hod/chess/core/RootCaptureWire;', b'Lru/hod/chess/core/PanelPlacement;', b'Lru/hod/chess/core/UciEngine;', b'Lru/hod/chess/LegacyUpgrade;'):
+            assert entry in dex, f'Missing class: {entry}'
+        for entry in (b'Lru/hod/chess/MaiaEngine;', b'Lru/hod/chess/core/ApiEngine;', b'Lru/hod/chess/TookenTransport;', b'Lru/hod/chess/core/LocalEngine;', b'Lru/hod/chess/core/EngineStrength;'):
+            assert entry not in dex, f'Retired engine class leaked: {entry}'
+        assert b'org.lichess.mobileV2' in dex, 'Official Lichess package missing'
+    print(f'PASS: {Path(apk).name}, Caissa 2.0 ARM64, verified network, 16 KiB alignment, offline manifest and no retired engines')
+
+
+if __name__ == '__main__':
+    verify(sys.argv[1])

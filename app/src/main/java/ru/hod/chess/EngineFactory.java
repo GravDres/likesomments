@@ -7,36 +7,24 @@ import java.util.Properties;
 import ru.hod.chess.core.*;
 
 final class EngineFactory {
-    static void useStrongAnalysis(Context c){
-        c.getSharedPreferences("hod",Context.MODE_PRIVATE).edit().putString(EngineMode.PREFERENCE,EngineMode.STOCKFISH.key()).putInt(EngineStrength.PREFERENCE,20).putString(TimeControlProfile.PREFERENCE,TimeControlProfile.CUSTOM.key()).putInt("millis",1500).putBoolean("maiaSampling",false).apply();
-    }
     static EngineSettings settings(Context c){
         android.content.SharedPreferences p=c.getSharedPreferences("hod",Context.MODE_PRIVATE);
-        return new EngineSettings(EngineMode.fromPreference(p.getString(EngineMode.PREFERENCE,null)),MaiaModel.fromPreference(p.getInt(MaiaModel.PREFERENCE,2200)),MaiaNetwork.fromPreference(p.getString(MaiaNetwork.PREFERENCE,null)),TimeControlProfile.fromPreference(p.getString(TimeControlProfile.PREFERENCE,null)),EngineStrength.fromPreference(p.getInt(EngineStrength.PREFERENCE,EngineStrength.DEFAULT_SKILL)),p.getInt("millis",1500),p.getBoolean("maiaSampling",true),ApiModel.fromPreference(p.getString(ApiModel.PREFERENCE,null)));
+        int cores=Math.max(1,Math.min(4,Runtime.getRuntime().availableProcessors()-1));
+        return new EngineSettings(TimeControlProfile.fromPreference(p.getString(TimeControlProfile.PREFERENCE,null)),
+                p.getInt("millis",1500),Math.min(cores,p.getInt("caissaThreads",2)),p.getInt("caissaHash",128));
     }
-    static ChessEngine create(Context c,int threads)throws Exception{
-        return create(c,threads,settings(c));
-    }
+    static ChessEngine create(Context c,int threads)throws Exception{return create(c,threads,settings(c));}
     static ChessEngine create(Context c,int threads,EngineSettings settings)throws Exception{
-        if(settings.mode()==EngineMode.API)return new ApiEngine(settings.apiModel(),new TookenTransport(c,settings.apiModel()));
-        if(settings.mode().usesMaia()){
-            Properties manifest=new Properties();try(InputStream in=c.getAssets().open("maia/models.properties")){manifest.load(in);}catch(java.io.IOException e){throw new java.io.IOException("Maia-3 отсутствует в APK. Нужна полная сборка из Actions",e);}
-            String name=settings.network().fileName();File model=ModelStore.ensure(new File(new File(c.getFilesDir(),"maia"),name),manifest.getProperty(name+".sha256"),()->c.getAssets().open("maia/"+name));
-            MaiaEngine maia=new MaiaEngine(model,settings,threads);
-            if(settings.mode()==EngineMode.MAIA)return maia;
-            try{
-                File verifier=new File(c.getApplicationInfo().nativeLibraryDir,"libstockfish.so");
-                if(!verifier.isFile())throw new java.io.IOException("Для проверки Maia нужен Stockfish в полной сборке Actions");
-                return new TacticalMaiaEngine(maia,new UciEngine(verifier,threads,1,20));
-            }catch(Exception e){maia.close();throw e;}
-        }
-        File stockfish=new File(c.getApplicationInfo().nativeLibraryDir,"libstockfish.so");
-        // A packaged executable is launched from the OS-managed native directory,
-        // not a writable app-data directory (Android's W^X requirement).
-        if(stockfish.isFile()){
-            android.content.SharedPreferences prefs=c.getSharedPreferences("hod",Context.MODE_PRIVATE);
-            return new UciEngine(stockfish,threads,prefs.getInt("variations",1),settings.strength().skill());
-        }
-        throw new java.io.IOException("Stockfish 19 отсутствует в APK. Установи полную сборку из GitHub Actions");
+        File executable=new File(c.getApplicationInfo().nativeLibraryDir,"libcaissa.so");
+        if(!executable.isFile())throw new java.io.IOException("Caissa отсутствует в APK. Установи полную сборку из Actions");
+        Properties manifest=new Properties();
+        try(InputStream in=c.getAssets().open("caissa/engine.properties")){manifest.load(in);}
+        String name=manifest.getProperty("network");
+        if(!"2.0".equals(manifest.getProperty("version"))||!"eval-ml-8-152B-spsa.pnn".equals(name))
+            throw new java.io.IOException("Несовместимая комплектация Caissa");
+        File model=ModelStore.ensure(new File(new File(c.getFilesDir(),"caissa"),name),
+                manifest.getProperty("network.sha256"),()->c.getAssets().open("caissa/"+name));
+        return new UciEngine(executable,model,Math.min(threads,settings.threads()),
+                c.getSharedPreferences("hod",Context.MODE_PRIVATE).getInt("variations",1),settings.hashMiB());
     }
 }

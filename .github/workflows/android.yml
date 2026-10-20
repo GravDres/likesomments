@@ -22,10 +22,8 @@ jobs:
           HOD_KEYSTORE_BASE64: ${{ secrets.HOD_KEYSTORE_BASE64 }}
           HOD_KEYSTORE_PASSWORD: ${{ secrets.HOD_KEYSTORE_PASSWORD }}
         run: python3 scripts/prepare-signing.py --output "$RUNNER_TEMP/hod-signing/hod-update.p12"
-      - name: Set up Python for Maia export
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
+      - name: Remove retired engines after ZIP update
+        run: python3 scripts/clean-legacy.py
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
@@ -36,25 +34,22 @@ jobs:
         with:
           gradle-version: '8.13'
       - name: Install SDK 36 and NDK r28c
-        run: sdkmanager --install 'platforms;android-36' 'build-tools;36.0.0' 'ndk;28.2.13676358'
-      - name: Check release lint before engine exports
+        run: sdkmanager --install 'platforms;android-36' 'build-tools;36.0.0' 'ndk;28.2.13676358' 'cmake;3.31.6'
+      - name: Check release lint before native builds
         env:
           HOD_KEYSTORE_PASSWORD: ${{ secrets.HOD_KEYSTORE_PASSWORD }}
         run: gradle --no-daemon --stacktrace -PcompactOnly :app:lintVitalRelease
-      - name: Test rules, panel position, engine strength, vision and root transport
+      - name: Test rules, Caissa protocol, panel position, vision and root transport
         run: bash scripts/test-core.sh
+      - name: Test Caissa network verification and ZIP migration
+        run: python3 tests/test-caissa-build.py
       - name: Test signing, key mismatch and private source exclusions
         run: python3 tests/test-signing.py
-      - name: Test Tooken HTTP protocol with simulated connections
-        env:
-          HOD_KEYSTORE_PASSWORD: ${{ secrets.HOD_KEYSTORE_PASSWORD }}
-        run: gradle --no-daemon --stacktrace -PcompactOnly :app:testDebugUnitTest
-      - name: Export official Maia-3 and verify ONNX and Java parity
-        run: bash scripts/build-maia.sh
-      - name: Build official Stockfish 19 + NNUE for ARM64
+      - name: Build Caissa 2.0, verify native protocol and compile ARM64
         run: |
           export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.2.13676358"
-          bash scripts/build-stockfish.sh
+          export PATH="$ANDROID_HOME/cmake/3.31.6/bin:$PATH"
+          bash scripts/build-caissa.sh
       - name: Build installable signed APK
         env:
           HOD_KEYSTORE_PASSWORD: ${{ secrets.HOD_KEYSTORE_PASSWORD }}
@@ -71,7 +66,7 @@ jobs:
           name: Hod-Android-arm64
           path: app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
-      - name: Download source and engine networks
+      - name: Download exact Caissa source and network
         uses: actions/upload-artifact@v4
         with:
           name: Hod-Corresponding-Source

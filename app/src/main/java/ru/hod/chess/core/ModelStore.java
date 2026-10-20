@@ -9,16 +9,16 @@ public final class ModelStore {
     public interface Source {InputStream open()throws IOException;}
     private ModelStore(){}
     public static synchronized File ensure(File destination,String expected,Source source)throws IOException{
-        if(expected==null||!expected.matches("[0-9a-f]{64}"))throw new IOException("Нет контрольной суммы модели Maia");
+        if(expected==null||!expected.matches("[0-9a-f]{64}"))throw new IOException("Нет контрольной суммы модели Caissa");
         if(destination.isFile()&&hash(destination).equals(expected))return destination;
         File parent=destination.getParentFile();if(!parent.isDirectory()&&!parent.mkdirs())throw new IOException("Не удалось создать каталог моделей");
-        File pending=File.createTempFile("maia-", ".part",parent);
+        File pending=File.createTempFile("caissa-", ".part",parent);
         try{
             MessageDigest digest=digest();long total=0;
             try(InputStream in=source.open();FileOutputStream out=new FileOutputStream(pending)){
-                byte[] buffer=new byte[32768];int n;while((n=in.read(buffer))!=-1){total+=n;if(total>256L*1024*1024)throw new IOException("Модель Maia слишком большая");digest.update(buffer,0,n);out.write(buffer,0,n);}out.getFD().sync();
+                byte[] buffer=new byte[32768];int n;while((n=in.read(buffer))!=-1){total+=n;if(total>256L*1024*1024)throw new IOException("Модель Caissa слишком большая");digest.update(buffer,0,n);out.write(buffer,0,n);}out.getFD().sync();
             }
-            if(!hex(digest.digest()).equals(expected))throw new IOException("Модель Maia повреждена: контрольная сумма не совпала");
+            if(!hex(digest.digest()).equals(expected))throw new IOException("Модель Caissa повреждена: контрольная сумма не совпала");
             Files.move(pending.toPath(),destination.toPath(),StandardCopyOption.REPLACE_EXISTING,StandardCopyOption.ATOMIC_MOVE);return destination;
         }finally{Files.deleteIfExists(pending.toPath());}
     }
