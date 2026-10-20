@@ -6,7 +6,7 @@ android {
     compileSdk 36
     buildToolsVersion '36.0.0'
     ndkVersion '28.2.13676358'
-    defaultConfig { applicationId 'ru.hod.chess'; minSdk 29; targetSdk 36; versionCode 20; versionName '0.20.0'; ndk { abiFilters 'arm64-v8a' } }
+    defaultConfig { applicationId 'ru.hod.chess'; minSdk 29; targetSdk 36; versionCode 22; versionName '0.22.0'; ndk { abiFilters 'arm64-v8a' } }
     signingConfigs {
         persistent {
             if (hodSigningStore) storeFile file(hodSigningStore)
@@ -27,7 +27,12 @@ android {
         release { minifyEnabled false; signingConfig signingConfigs.persistent }
     }
 }
-dependencies { coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'; implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.23.2' }
+dependencies {
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'
+    implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.23.2'
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20250517'
+}
 tasks.register('verifyEngine') {
     doLast {
         if (!project.hasProperty('compactOnly') && !file('src/main/jniLibs/arm64-v8a/libstockfish.so').isFile()) {

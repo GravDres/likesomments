@@ -37,10 +37,11 @@ fi
 "$task_root/tools/gradle-8.13/bin/gradle" --no-daemon -PcompactOnly :app:lintVitalRelease
 bash scripts/test-core.sh
 python3 tests/test-signing.py
+"$task_root/tools/gradle-8.13/bin/gradle" --no-daemon -PcompactOnly :app:testDebugUnitTest
 bash scripts/build-maia.sh
 bash scripts/build-stockfish.sh
 "$task_root/tools/gradle-8.13/bin/gradle" --no-daemon :app:assembleRelease
 python3 scripts/verify-apk.py app/build/outputs/apk/release/app-release.apk
 python3 scripts/verify-signature.py app/build/outputs/apk/release/app-release.apk --apksigner "$ANDROID_HOME/build-tools/36.0.0/apksigner"
-cp app/build/outputs/apk/release/app-release.apk artifacts/Hod-0.20-arm64.apk
-echo "APK: $task_root/artifacts/Hod-0.20-arm64.apk"
+cp app/build/outputs/apk/release/app-release.apk artifacts/Hod-0.22-arm64.apk
+echo "APK: $task_root/artifacts/Hod-0.22-arm64.apk"

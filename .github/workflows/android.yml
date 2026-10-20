@@ -45,6 +45,10 @@ jobs:
         run: bash scripts/test-core.sh
       - name: Test signing, key mismatch and private source exclusions
         run: python3 tests/test-signing.py
+      - name: Test Tooken HTTP protocol with simulated connections
+        env:
+          HOD_KEYSTORE_PASSWORD: ${{ secrets.HOD_KEYSTORE_PASSWORD }}
+        run: gradle --no-daemon --stacktrace -PcompactOnly :app:testDebugUnitTest
       - name: Export official Maia-3 and verify ONNX and Java parity
         run: bash scripts/build-maia.sh
       - name: Build official Stockfish 19 + NNUE for ARM64
@@ -79,6 +83,15 @@ jobs:
         with:
           name: Hod-Lint-Reports
           path: app/build/reports/lint-results*
+          if-no-files-found: ignore
+      - name: Download unit test reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Hod-Test-Reports
+          path: |
+            app/build/reports/tests/
+            app/build/test-results/
           if-no-files-found: ignore
       - name: Remove temporary signing key
         if: always()

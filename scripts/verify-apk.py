@@ -55,7 +55,7 @@ with zipfile.ZipFile(apk) as archive:
     for name in ('Maia3-AGPL-3.txt','Maia3-SOURCE.txt','ONNXRuntime-LICENSE.txt','ONNXRuntime-ThirdPartyNotices.txt'):
         assert len(archive.read('assets/licenses/'+name))>20, f'Missing license: {name}'
     dex = [archive.read(name) for name in archive.namelist() if name.startswith('classes') and name.endswith('.dex')]
-    for entry in (b'Lru/hod/chess/RootCaptureMain;', b'Lru/hod/chess/core/RootCaptureWire;', b'Lru/hod/chess/core/ChessPlatform;', b'Lru/hod/chess/core/EngineStrength;', b'Lru/hod/chess/MaiaEngine;', b'Lru/hod/chess/core/MaiaPolicy;', b'Lru/hod/chess/core/TacticalMaiaEngine;', b'Lru/hod/chess/core/PanelPlacement;'):
+    for entry in (b'Lru/hod/chess/RootCaptureMain;', b'Lru/hod/chess/core/RootCaptureWire;', b'Lru/hod/chess/core/ChessPlatform;', b'Lru/hod/chess/core/EngineStrength;', b'Lru/hod/chess/MaiaEngine;', b'Lru/hod/chess/core/MaiaPolicy;', b'Lru/hod/chess/core/TacticalMaiaEngine;', b'Lru/hod/chess/core/PanelPlacement;', b'Lru/hod/chess/core/ApiEngine;', b'Lru/hod/chess/TookenTransport;', b'Lru/hod/chess/ApiKeyStore;', b'Lru/hod/chess/core/ApiChessFacts;', b'Lru/hod/chess/core/ApiModelBenchmark;'):
         assert any(entry in data for data in dex), f'Missing application entry point: {entry}'
     assert any(b'org.lichess.mobileV2' in data for data in dex), 'Official Lichess app package missing'
 print(f'PASS: {apk.name}, ARM64 Stockfish + NNUE ({len(binary):,} bytes), Maia-3 5M/23M + hashes + export parity, 16 KiB alignment of all native libraries, licenses and capture')
