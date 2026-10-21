@@ -108,12 +108,50 @@ public final class BoardVision {
             for(int i=0;i<mask.length;i++)if(redBackground[i])mask[i]=0;
             occupied=Math.max(0,occupied-redMass);ink=Math.max(0,ink-redInk);foreground-=redForeground;
         }
+        // A selected piece adds translucent, filled disks on empty destination
+        // squares. Require a small centered round shape AND a neutral blend of
+        // the square colour; do not globally lower piece occupancy thresholds.
+        if(foreground>=8&&foreground<=150&&isMoveDot(mask,pixels,w,x0,y0,cell,br,bg,bb)){
+            Arrays.fill(mask,0);occupied=0;ink=0;foreground=0;
+        }
         Feature feature=new Feature(mask,occupied>0?ink/occupied:0,foreground/(float)(N*N));
         if(!interiorTone)return feature;
         // White filling on a very light square has little contrast. Measuring only
         // contrasting pixels sees its black outline and confuses it with a black piece.
         float tone=0,mass=0;for(int i=0;i<N*N;i++){float filled=feature.silhouette()[i];tone+=filled*lightness[i];mass+=filled;}
         return new Feature(mask,mass>0?tone/mass:feature.ink(),feature.occupancy(),feature.silhouette(),feature.normalized());
+    }
+    private static boolean isMoveDot(float[] mask,int[] pixels,int width,int x0,int y0,float cell,int br,int bg,int bb){
+        int minX=N,minY=N,maxX=-1,maxY=-1,count=0;
+        for(int y=0;y<N;y++)for(int x=0;x<N;x++)if(mask[y*N+x]>.12f){
+            minX=Math.min(minX,x);maxX=Math.max(maxX,x);minY=Math.min(minY,y);maxY=Math.max(maxY,y);count++;
+        }
+        if(count<8||count>150||minX<4||minY<4||maxX>=N-4||maxY>=N-4)return false;
+        int dx=maxX-minX+1,dy=maxY-minY+1;
+        if(dx<3||dy<3||dx>14||dy>14||dx<dy*.75f||dx>dy*1.5f)return false;
+        float cx=(minX+maxX)/2f,cy=(minY+maxY)/2f,filled=count/(float)(dx*dy);
+        if(Math.abs(cx-(N-1)/2f)>1.5f||Math.abs(cy-(N-1)/2f)>1.5f||filled<.56f||filled>.91f)return false;
+        int core=0,coreInk=0,corners=0,cornerInk=0,neutral=0;
+        for(int y=minY;y<=maxY;y++)for(int x=minX;x<=maxX;x++){
+            float nx=(x-cx)/(dx*.5f),ny=(y-cy)/(dy*.5f),radius=nx*nx+ny*ny;
+            boolean ink=mask[y*N+x]>.12f;
+            if(radius<.35f){core++;if(ink)coreInk++;}
+            if(radius>1.35f){corners++;if(ink)cornerInk++;}
+            if(ink){int xx=x0+Math.round((.12f+(x+.5f)/N*.76f)*cell),yy=y0+Math.round((.08f+(y+.5f)/N*.84f)*cell);if(isNeutralOverlay(pixels[yy*width+xx],br,bg,bb))neutral++;}
+        }
+        return core>0&&coreInk>=core*.9f&&cornerInk<=Math.max(1,corners*.08f)&&neutral>=count*.9f;
+    }
+    private static boolean isNeutralOverlay(int pixel,int br,int bg,int bb){
+        int r=pixel>>16&255,g=pixel>>8&255,b=pixel&255;
+        float norm=br*br+bg*bg+bb*bb;
+        if(norm>0){
+            float scale=(r*br+g*bg+b*bb)/norm;
+            if(scale>=.55f&&scale<=.95f&&Math.abs(r-br*scale)<=8&&Math.abs(g-bg*scale)<=8&&Math.abs(b-bb*scale)<=8)return true;
+        }
+        float wr=255-br,wg=255-bg,wb=255-bb;norm=wr*wr+wg*wg+wb*wb;
+        if(norm==0)return false;
+        float alpha=((r-br)*wr+(g-bg)*wg+(b-bb)*wb)/norm;
+        return alpha>=.05f&&alpha<=.45f&&Math.abs(r-br-wr*alpha)<=8&&Math.abs(g-bg-wg*alpha)<=8&&Math.abs(b-bb-wb*alpha)<=8;
     }
     private static boolean isRedBackground(int r,int g,int b,int br,int bg,int bb){
         if(bg+bb<40)return false;
