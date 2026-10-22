@@ -3,11 +3,18 @@ package ru.hod.chess;
 import android.content.Context;
 import java.io.File;
 import java.security.KeyStore;
+import ru.hod.chess.core.*;
 
 /** Remove only retired engine settings/data. Board history and overlay placement survive. */
 final class LegacyUpgrade {
     static void run(Context context){
         android.content.SharedPreferences prefs=context.getSharedPreferences("hod",Context.MODE_PRIVATE);
+        java.util.Map<String,Object> changes=TrainingUpgrade.changes(prefs.getAll());
+        if(!changes.isEmpty()){
+            android.content.SharedPreferences.Editor training=prefs.edit();
+            for(var change:changes.entrySet())if(change.getValue() instanceof Boolean value)training.putBoolean(change.getKey(),value);else training.putString(change.getKey(),(String)change.getValue());
+            training.apply();
+        }
         if(prefs.getBoolean("caissa23Migrated",false))return;
         context.getSharedPreferences("hod-api-key",Context.MODE_PRIVATE).edit().clear().apply();
         boolean keyRemoved=true;

@@ -25,7 +25,7 @@ public final class CaissaClientTest {
     private static Position play(Position p,String...moves){for(String move:moves)p=p.play(Move.parse(move));return p;}
     public static void main(String[] args)throws Exception{
         try{
-            settings();protocol();moveOnlyResults();specialMoves();lifecycle();failureRecovery();modelStore();
+            settings();protocol();searchLevels();moveOnlyResults();specialMoves();lifecycle();failureRecovery();modelStore();
             System.out.println("PASS: "+count+" Caissa client assertions (simulated protocol, not a strength benchmark)");
         }finally{try(var paths=Files.walk(work)){for(Path path:paths.sorted(Comparator.reverseOrder()).toList())Files.deleteIfExists(path);}}
     }
@@ -43,6 +43,52 @@ public final class CaissaClientTest {
         EngineSettings low=new EngineSettings(TimeControlProfile.CUSTOM,-5,-8,-20);
         check(low.analysisMillis()==300&&low.threads()==1&&low.hashMiB()==64,"lower resource bounds");
         check(new EngineSettings(TimeControlProfile.BLITZ_3_2,1500,2,128).label().contains("Caissa 2.0"),"honest engine label");
+        check(SearchLevel.fromPreference(null)==SearchLevel.MODERATE&&SearchLevel.fromPreference("unknown")==SearchLevel.MODERATE,"new and unknown strength default to moderate");
+        check(SearchLevel.LIGHT.nodeLimit()>0&&SearchLevel.LIGHT.nodeLimit()<SearchLevel.MODERATE.nodeLimit()&&SearchLevel.FULL.nodeLimit()==0,"training budgets ordered; zero denotes time-only maximum");
+        for(SearchLevel level:SearchLevel.values()){
+            check(SearchLevel.fromPreference(level.key())==level,"strength preference roundtrip");
+            EngineSettings selected=new EngineSettings(TimeControlProfile.BLITZ_3_2,1500,2,128,level);
+            check(selected.level()==level&&selected.label().contains(level.label()),"strength retained in settings and label");
+            check(selected.analysisMillis()==600,"strength does not silently change the time control");
+        }
+        check(new EngineSettings(TimeControlProfile.BLITZ_3_2,1500,2,128).level()==SearchLevel.MODERATE,"legacy constructor uses moderate app default");
+    }
+    private static int occurrences(String text,String token){int count=0;for(int index=0;(index=text.indexOf(token,index))>=0;index+=token.length())count++;return count;}
+    private static void searchLevels()throws Exception{
+        Path log=work.resolve("search-levels.log");
+        try(UciEngine engine=engine("normal",log)){
+            int resets=occurrences(Files.readString(log),"ucinewgame");
+            Position initial=Position.fromFen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 17");
+            List<Move> history=List.of(Move.parse("e2e4"),Move.parse("e7e5"),Move.parse("g1f3"));Position target=initial;for(Move move:history)target=target.play(move);
+            for(SearchLevel level:new SearchLevel[]{SearchLevel.MODERATE,SearchLevel.LIGHT,SearchLevel.FULL,SearchLevel.MODERATE}){
+                engine.setSearchLevel(level);String before=Files.readString(log);int now=occurrences(before,"ucinewgame");check(now==++resets,"changing strength clears previous search work exactly once");
+                engine.setSearchLevel(level);check(occurrences(Files.readString(log),"ucinewgame")==resets,"same strength keeps search memory");
+                AtomicReference<Analysis> result=new AtomicReference<>();engine.analyzeGame(initial,target,history,60,result::set);
+                check(result.get()!=null&&target.legalMoves().contains(result.get().bestMove()),"limited search retains legal history result");
+                String after=Files.readString(log);String lastGo=after.lines().filter(line->line.startsWith("go ")).reduce((a,b)->b).orElseThrow();
+                check(lastGo.equals("go movetime 60"+(level.nodeLimit()==0?"":" nodes "+level.nodeLimit())),"exact node and time budgets for "+level.key());
+                check(after.contains("position fen "+initial.fen()+" moves e2e4 e7e5 g1f3"),"level reset does not lose baseline or history");
+                check(after.lines().filter(line->line.startsWith("setoption name EvalRandomization value ")).allMatch(line->line.equals("setoption name EvalRandomization value 0")),"strength is search budget, not random evaluation noise");
+            }
+            engine.newGame();analyze(engine,Position.start());String lastGo=Files.readString(log).lines().filter(line->line.startsWith("go ")).reduce((a,b)->b).orElseThrow();
+            check(lastGo.equals("go movetime 60 nodes "+SearchLevel.MODERATE.nodeLimit()),"new game keeps selected strength");
+            boolean rejected=false;try{engine.setSearchLevel(null);}catch(NullPointerException expected){rejected=true;}
+            check(rejected&&engine.isRunning(),"invalid level changes nothing and does not kill process");
+        }
+        try(UciEngine engine=engine("bestmove-only",work.resolve("limited-move-only.log"))){
+            for(SearchLevel level:SearchLevel.values()){
+                engine.setSearchLevel(level);noEvaluation(analyze(engine,Position.start()),"limited bestmove-only "+level.key());
+            }
+        }
+        try(UciEngine engine=engine("slow-stop",work.resolve("limited-cancel.log"))){
+            engine.setSearchLevel(SearchLevel.MODERATE);ExecutorService queue=Executors.newSingleThreadExecutor();CountDownLatch started=new CountDownLatch(1);
+            try{
+                Future<?> old=queue.submit(()->{try{engine.analyze(Position.start(),2000,a->started.countDown());}catch(InterruptedException expected){Thread.currentThread().interrupt();}catch(Exception failure){throw new RuntimeException(failure);}});
+                check(started.await(3,TimeUnit.SECONDS),"limited search starts before mode change");old.cancel(true);
+                Future<Analysis> next=queue.submit(()->{engine.setSearchLevel(SearchLevel.LIGHT);return analyze(engine,play(Position.start(),"e2e4"));});
+                check(next.get(5,TimeUnit.SECONDS).bestMove().uci().equals("e7e5"),"switching strength after cancellation cannot publish old White move");
+            }finally{queue.shutdownNow();}
+        }
     }
     private static void protocol()throws Exception{
         Path log=work.resolve("protocol.log");

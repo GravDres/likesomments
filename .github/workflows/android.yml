@@ -8,7 +8,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -39,17 +39,18 @@ jobs:
         env:
           HOD_KEYSTORE_PASSWORD: ${{ secrets.HOD_KEYSTORE_PASSWORD }}
         run: gradle --no-daemon --stacktrace -PcompactOnly :app:lintVitalRelease
-      - name: Test rules, Caissa protocol, panel position, vision and root transport
+      - name: Test rules, engine strength, hint visibility, panel position, vision and root transport
         run: bash scripts/test-core.sh
       - name: Test Caissa network verification and ZIP migration
         run: python3 tests/test-caissa-build.py
       - name: Test signing, key mismatch and private source exclusions
         run: python3 tests/test-signing.py
-      - name: Build Caissa 2.0, verify native protocol and compile ARM64
+      - name: Build Caissa + Texel, verify native protocols and compile ARM64
         run: |
           export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.2.13676358"
           export PATH="$ANDROID_HOME/cmake/3.31.6/bin:$PATH"
           bash scripts/build-caissa.sh
+          bash scripts/build-texel.sh
       - name: Build installable signed APK
         env:
           HOD_KEYSTORE_PASSWORD: ${{ secrets.HOD_KEYSTORE_PASSWORD }}
@@ -66,7 +67,7 @@ jobs:
           name: Hod-Android-arm64
           path: app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
-      - name: Download exact Caissa source and network
+      - name: Download exact engine sources and networks
         uses: actions/upload-artifact@v4
         with:
           name: Hod-Corresponding-Source

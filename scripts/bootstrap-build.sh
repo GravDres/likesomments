@@ -41,8 +41,9 @@ bash scripts/test-core.sh
 python3 tests/test-caissa-build.py
 python3 tests/test-signing.py
 bash scripts/build-caissa.sh
+bash scripts/build-texel.sh
 "$task_root/tools/gradle-8.13/bin/gradle" --no-daemon :app:assembleRelease
 python3 scripts/verify-apk.py app/build/outputs/apk/release/app-release.apk
 python3 scripts/verify-signature.py app/build/outputs/apk/release/app-release.apk --apksigner "$ANDROID_HOME/build-tools/36.0.0/apksigner"
-cp app/build/outputs/apk/release/app-release.apk artifacts/Hod-0.25-arm64.apk
-echo "APK: $task_root/artifacts/Hod-0.25-arm64.apk"
+cp app/build/outputs/apk/release/app-release.apk artifacts/Hod-0.28-arm64.apk
+echo "APK: $task_root/artifacts/Hod-0.28-arm64.apk"

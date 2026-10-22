@@ -27,6 +27,8 @@ public final class CaptureService extends Service {
     public static final String PLATFORM_CHANGED="ru.hod.chess.PLATFORM_CHANGED";
     public static final String STRENGTH_CHANGED="ru.hod.chess.STRENGTH_CHANGED";
     public static final String ENGINE_CHANGED="ru.hod.chess.ENGINE_CHANGED";
+    public static final String HINT_VISIBILITY_CHANGED="ru.hod.chess.HINT_VISIBILITY_CHANGED";
+    private final HintVisibility hintVisibility=new HintVisibility();
     private final Handler main=new Handler(Looper.getMainLooper());
     private HandlerThread captureThread;private Handler capture;
     private volatile MediaProjection projection;private volatile VirtualDisplay display;private volatile ImageReader reader;
@@ -72,6 +74,7 @@ public final class CaptureService extends Service {
             if(intent!=null&&PLATFORM_CHANGED.equals(intent.getAction()))changePlatform();
             if(intent!=null&&STRENGTH_CHANGED.equals(intent.getAction()))changeEngineSettings();
             if(intent!=null&&ENGINE_CHANGED.equals(intent.getAction()))changeEngineSettings();
+            if(intent!=null&&HINT_VISIBILITY_CHANGED.equals(intent.getAction()))changeHintVisibility();
             if(intent!=null&&START_ROOT.equals(intent.getAction()))startRootCapture(intent.getBooleanExtra("refresh",false));
             else if(intent==null&&prefs().getBoolean("rootCapture",false))startRootCapture(false);
             else if(intent!=null&&intent.hasExtra("permission"))startCapture(intent);
@@ -96,7 +99,7 @@ public final class CaptureService extends Service {
     }
     private void initialize(){
         foreground(false);captureThread=new HandlerThread("screen-frames");captureThread.start();capture=new Handler(captureThread.getLooper());
-        arrows=new ArrowOverlay(this);whiteBottom=prefs().getBoolean("whiteBottom",true);playerSide=prefs().getBoolean("playerWhite",true)?PlayerSide.WHITE:PlayerSide.BLACK;platform=ChessPlatform.fromPreference(prefs().getString("chessPlatform",null));sessionStore=new SessionStore(this,platform);
+        LegacyUpgrade.run(this);hintVisibility.enabled(prefs().getBoolean(HintVisibility.PREFERENCE,true));arrows=new ArrowOverlay(this);whiteBottom=prefs().getBoolean("whiteBottom",true);playerSide=prefs().getBoolean("playerWhite",true)?PlayerSide.WHITE:PlayerSide.BLACK;platform=ChessPlatform.fromPreference(prefs().getString("chessPlatform",null));sessionStore=new SessionStore(this,platform);
         try{GameMemory.Restored saved=sessionStore.load();if(saved!=null){vision=saved.vision();tracker=saved.game();whiteBottom=vision.whiteBottom();}}catch(java.io.IOException e){captureProblem="Сохранённая партия не читается · начни новую";}
         panel=new FloatingPanel(this,new FloatingPanel.Actions(){
             public void calibrate(){if(capturing)startAutomaticSearch();else requestCapture();}
@@ -106,7 +109,13 @@ public final class CaptureService extends Service {
             public void review(){if(capturing)selectPosition();else requestCapture();}
             public void side(PlayerSide side){changeSide(side);}public void newGame(){startNewGame();}
             public void profile(TimeControlProfile value){prefs().edit().putString(TimeControlProfile.PREFERENCE,value.key()).apply();changeEngineSettings();}
+            public void engine(EngineKind value){prefs().edit().putString(EngineKind.PREFERENCE,value.key()).apply();changeEngineSettings();}
+            public void advice(AdviceStyle value){prefs().edit().putString(AdviceStyle.PREFERENCE,value.key()).apply();changeEngineSettings();}
+            public void level(SearchLevel value){prefs().edit().putString(SearchLevel.PREFERENCE,value.key()).apply();changeEngineSettings();}
             public void pause(boolean value){setPaused(value);}
+            public void hideOnTouch(boolean value){prefs().edit().putBoolean(HintVisibility.PREFERENCE,value).apply();changeHintVisibility();}
+            public void gameTouch(float x,float y){hideHintOnTouch(x,y);}
+            public void revealHint(){revealHintNow();}
             public void arrows(boolean value){prefs().edit().putBoolean("arrows",value).apply();if(!value)hideArrow();}
             public void deeper(){Position p=analyzedPosition;if(!capturing||paused||p==null||!playerSide.ownsTurn(p)){Toast.makeText(CaptureService.this,"Дождись своего хода и подтверждённой позиции",Toast.LENGTH_SHORT).show();return;}EngineSettings selected=EngineFactory.settings(CaptureService.this);beginAnalysis(p,currentConfidence,epoch.get(),8000);}
             public void stop(){stopSelf();}
@@ -169,9 +178,9 @@ public final class CaptureService extends Service {
     private ChessEngine ensureEngine(int threads,EngineSettings wanted)throws Exception{
         int generation=captureGeneration;
         ChessEngine current=engine;
-        if(current instanceof UciEngine nativeEngine&&nativeEngine.isRunning()){
+        if(current instanceof UciEngine nativeEngine&&nativeEngine.isRunning()&&nativeEngine.kind()==wanted.kind()){
             // Changing a time budget does not reload the network or erase search memory.
-            nativeEngine.configure(threads,1,wanted.hashMiB());activeEngineSettings=wanted;return nativeEngine;
+            nativeEngine.configure(wanted.effectiveThreads(),wanted.variations(1),wanted.hashMiB());nativeEngine.setSearchLevel(wanted.level());nativeEngine.setAdviceStyle(wanted.advice());activeEngineSettings=wanted;return nativeEngine;
         }
         ChessEngine old=engine;engine=null;activeEngineSettings=null;if(old!=null)old.close();engineLoading=true;
         try{
@@ -229,7 +238,7 @@ public final class CaptureService extends Service {
                             engineStartedAt=0;stalled=engine;engine=null;invalidateSearch();
                         }
                     }
-                    if(stalled!=null)stalled.close();if(stop)panel.message("Перезапускаю Caissa · история сохранена");
+                    if(stalled!=null)stalled.close();if(stop)panel.message("Перезапускаю движок · история сохранена");
                 }
             }else panel.health(rootStarting?"Root · ожидаю разрешение":"Захват остановлен · ↻ продолжить");
         }catch(RuntimeException e){if(!destroyed){captureProblem="Проверь разрешение плавающего окна";}}
@@ -283,7 +292,7 @@ public final class CaptureService extends Service {
         if(shown!=null){
             // A screenshot containing our arrow is used ONLY for motion screening.
             // Recognition always waits for an image captured after the arrow was hidden.
-            if(!prefs().getBoolean("arrows",true)){hideArrow();return;}
+            if(!prefs().getBoolean("arrows",true)||EngineFactory.settings(this).advice()==AdviceStyle.IDEAS){hideArrow();return;}
             ArrowGeometry localShape=new ArrowGeometry(f.local(shown.shape().region),shown.shape().move,whiteBottom);
             if(!f.sameArea(shown.clean())||BoardChangeDetector.changed(shown.clean().pixels(),f.pixels(),f.width(),f.height(),localShape)){
                 boardVerified=false;stability.clear();hideArrow();main.post(()->{if(panel!=null)panel.message("Позиция меняется · проверяю ход…");});
@@ -311,6 +320,7 @@ public final class CaptureService extends Service {
                 recordBoardFailure(gen);if(++badFrames==3)main.post(()->{if(panel!=null&&gen==epoch.get())panel.message("Позиция не совпала · перепроверяю расположение доски");});return;
             }
             boardRecovery.reset();badFrames=0;frameErrors=0;lastGoodAt=SystemClock.elapsedRealtime();boardVerified=true;currentConfidence=o.confidence();Position p=game.position();confirmed=new Confirmed(game.initial(),p,game.history(),f);
+            hintVisibility.confirmed(p);if(playerSide.ownsTurn(p)&&hintVisibility.markers(p,o.moveIndicators())){hideArrow();main.post(()->{synchronized(CaptureService.this){if(panel!=null&&gen==epoch.get()&&!destroyed&&hintVisibility.hidden(p))panel.hintHidden();}});}
             if(update.status()==GameTracker.Status.MOVED)saveSession(game,model);
             if(p.legalMoves().isEmpty()){invalidateSearch();main.post(()->{if(panel!=null&&gen==epoch.get())panel.terminal(p);});return;}
             String draw=game.automaticDraw();if(draw!=null){invalidateSearch();main.post(()->{if(panel!=null&&gen==epoch.get())panel.draw(draw);});return;}
@@ -319,7 +329,7 @@ public final class CaptureService extends Service {
                 main.post(()->{if(panel!=null&&gen==epoch.get()&&boardVerified&&!paused&&!playerSide.ownsTurn(p)&&confirmed!=null&&confirmed.position().fen().equals(p.fen()))panel.waiting(playerSide,game.history().size());});return;
             }
             if(analyzedPosition!=null&&analyzedPosition.fen().equals(p.fen())){
-                Analysis a=lastAnalysis;long token=searchEpoch.get();if(a!=null)main.post(()->{if(panel!=null&&gen==epoch.get()&&token==searchEpoch.get()&&!paused&&boardVerified&&playerSide.ownsTurn(p)){panel.show(p,a,o.confidence(),analysisComplete,game.history().size());if(analysisComplete)showArrow(p,a,gen,token);}});return;
+                long token=searchEpoch.get();if(lastAnalysis!=null)main.post(()->presentAnalysis(p,o.confidence(),game.history().size(),gen,token));return;
             }
             beginAnalysis(p,o.confidence(),gen);
         }
@@ -345,6 +355,7 @@ public final class CaptureService extends Service {
         else panel.message(EngineFactory.settings(this).label()+" · проверяю доску");
     }
     private synchronized void changePlatform(){
+        hintVisibility.reset();
         ChessPlatform selected=ChessPlatform.fromPreference(prefs().getString("chessPlatform",null));if(selected==platform)return;
         // Every recognition/save operation holds this monitor before committing. Invalidate
         // old work before changing stores, so another platform cannot receive its history.
@@ -357,17 +368,44 @@ public final class CaptureService extends Service {
         panel.message(selected.label()+" выбран · открой его доску");if(capturing&&!paused)startAutomaticSearch();
     }
     private synchronized void changeSide(PlayerSide side){
+        hintVisibility.reset();
         if(destroyed)return;playerSide=side;panel.setSide(side);prefs().edit().putBoolean("playerWhite",side==PlayerSide.WHITE).apply();
         invalidateSearch();if(confirmed!=null&&boardVerified&&!paused){Position p=confirmed.position();if(side.ownsTurn(p))beginAnalysis(p,currentConfidence,epoch.get());else panel.waiting(side,confirmed.moves().size());}
         else panel.message("Ты играешь "+side.label()+" · проверяю доску");
     }
     private synchronized void startNewGame(){
+        hintVisibility.reset();
         if(destroyed)return;invalidateSearch();long gen=epoch.incrementAndGet();automaticSearch=false;preparingSelection=false;selecting=false;
         if(selector!=null){selector.close();selector=null;}if(review!=null){review.close();review=null;}boardVerified=false;confirmed=null;region=null;stability.clear();
         // Queue the reset behind any in-flight recognition and persistence operation.
         engineQueue.submit(()->{try{if(engine instanceof HistoryEngine nativeEngine)nativeEngine.newGame();}catch(Exception e){ChessEngine old=engine;engine=null;if(old!=null)old.close();}});
         visionQueue.execute(()->{synchronized(CaptureService.this){if(destroyed||gen!=epoch.get())return;archiveSession();tracker=new GameTracker(Position.start());if(vision!=null)saveSession(tracker,vision);else sessionStore.clear();}main.post(()->{if(gen==epoch.get()&&!destroyed&&!paused&&capturing)startAutomaticSearch(true);});});
         panel.message("Новая партия · открой начальную расстановку");
+    }
+    private synchronized void hideHintOnTouch(float x,float y){
+        if(destroyed||!capturing||paused||selecting||preparingSelection||automaticSearch||MainActivity.isVisible()||confirmed==null||region==null)return;
+        // Android may redact coordinates of ACTION_OUTSIDE from another app to 0,0.
+        // In that case conservatively hide on any outside touch; never intercept the original gesture.
+        BoardVision.Region r=region;if((x!=0||y!=0)&&(x<r.left()||x>=r.left()+r.size()||y<r.top()||y>=r.top()+r.size()))return;
+        Position p=confirmed.position();if(!playerSide.ownsTurn(p))return;
+        hintVisibility.enabled(prefs().getBoolean(HintVisibility.PREFERENCE,true));
+        if(hintVisibility.touch(p)){hideArrow();panel.hintHidden();}
+    }
+    private synchronized void changeHintVisibility(){
+        hintVisibility.enabled(prefs().getBoolean(HintVisibility.PREFERENCE,true));panel.refreshHintVisibility();
+        if(confirmed!=null&&boardVerified&&!paused){Position p=confirmed.position();if(playerSide.ownsTurn(p)){if(lastAnalysis!=null)presentAnalysis(p,currentConfidence,confirmed.moves().size(),epoch.get(),searchEpoch.get());else beginAnalysis(p,currentConfidence,epoch.get());}}
+    }
+    private synchronized void revealHintNow(){
+        hintVisibility.reveal();
+        if(destroyed||!capturing||paused||confirmed==null||!boardVerified){if(panel!=null)panel.message("Жду подтверждённую позицию");return;}
+        Position p=confirmed.position();if(!playerSide.ownsTurn(p)){panel.waiting(playerSide,confirmed.moves().size());return;}
+        if(lastAnalysis!=null)presentAnalysis(p,currentConfidence,confirmed.moves().size(),epoch.get(),searchEpoch.get());else beginAnalysis(p,currentConfidence,epoch.get());
+    }
+    /** Read the current cached result when the UI callback runs, not an older queued PV. */
+    private synchronized void presentAnalysis(Position p,float confidence,int plies,long gen,long token){
+        if(destroyed||panel==null||gen!=epoch.get()||token!=searchEpoch.get()||paused||!boardVerified||!playerSide.ownsTurn(p)||confirmed==null||!confirmed.position().fen().equals(p.fen()))return;
+        if(hintVisibility.hidden(p)){panel.hintHidden();return;}Analysis current=lastAnalysis;if(current==null)return;
+        panel.show(p,current,confidence,analysisComplete,plies);if(analysisComplete)showArrow(p,current,gen,token);
     }
     private synchronized void invalidateSearch(){engineStartedAt=0;searchEpoch.incrementAndGet();if(search!=null)search.cancel(true);search=null;analyzedPosition=null;lastAnalysis=null;analysisComplete=false;hideArrow();}
     private synchronized void beginAnalysis(Position p,float confidence,long gen){
@@ -377,24 +415,23 @@ public final class CaptureService extends Service {
         if(destroyed||paused||!boardVerified||!playerSide.ownsTurn(p)||gen!=epoch.get())return;
         Confirmed snapshot=confirmed;if(snapshot==null||!snapshot.position().fen().equals(p.fen()))return;
         invalidateSearch();long token=searchEpoch.get();analyzedPosition=p;lastUiReport=0;
-        engineStartedAt=SystemClock.elapsedRealtime();main.post(()->{if(panel!=null&&token==searchEpoch.get()&&gen==epoch.get()&&!paused&&boardVerified&&playerSide.ownsTurn(p))panel.thinking(p);});
+        engineStartedAt=SystemClock.elapsedRealtime();main.post(()->{synchronized(CaptureService.this){if(panel!=null&&token==searchEpoch.get()&&gen==epoch.get()&&!destroyed&&!paused&&boardVerified&&playerSide.ownsTurn(p)){if(hintVisibility.hidden(p))panel.hintHidden();else panel.thinking(p);}}});
         search=engineQueue.submit(()->{
             try{
                 if(token!=searchEpoch.get()||destroyed)return;
                 int threads=engineThreads();
                 ChessEngine selectedEngine=ensureEngine(threads,EngineFactory.settings(this));
-                if(selectedEngine instanceof UciEngine nativeEngine)nativeEngine.configure(threads,1,EngineFactory.settings(this).hashMiB());
                 if(token!=searchEpoch.get())return;
-                java.util.function.Consumer<Analysis> report=a->{synchronized(CaptureService.this){if(token!=searchEpoch.get()||gen!=epoch.get()||destroyed||paused||!playerSide.ownsTurn(p))return;lastAnalysis=a;long now=SystemClock.elapsedRealtime();if(now-lastUiReport<180)return;lastUiReport=now;}main.post(()->{if(panel!=null&&token==searchEpoch.get()&&gen==epoch.get()&&!paused&&boardVerified&&playerSide.ownsTurn(p))panel.show(p,a,confidence,false,snapshot.moves().size());});};
+                java.util.function.Consumer<Analysis> report=a->{synchronized(CaptureService.this){if(token!=searchEpoch.get()||gen!=epoch.get()||destroyed||paused||!playerSide.ownsTurn(p))return;lastAnalysis=a;long now=SystemClock.elapsedRealtime();if(now-lastUiReport<180)return;lastUiReport=now;}main.post(()->presentAnalysis(p,confidence,snapshot.moves().size(),gen,token));};
                 if(selectedEngine instanceof HistoryEngine nativeEngine)nativeEngine.analyzeGame(snapshot.initial(),p,snapshot.moves(),millis,report);else selectedEngine.analyze(p,millis,report);
-                synchronized(CaptureService.this){if(token==searchEpoch.get()&&gen==epoch.get()&&!destroyed&&!paused){analysisComplete=true;engineStartedAt=0;Analysis finalResult=lastAnalysis;if(finalResult!=null)main.post(()->{if(token==searchEpoch.get()&&gen==epoch.get()&&boardVerified&&playerSide.ownsTurn(p)&&!paused){panel.show(p,finalResult,confidence,true,snapshot.moves().size());showArrow(p,finalResult,gen,token);}});}}
+                synchronized(CaptureService.this){if(token==searchEpoch.get()&&gen==epoch.get()&&!destroyed&&!paused){analysisComplete=true;engineStartedAt=0;if(lastAnalysis!=null)main.post(()->presentAnalysis(p,confidence,snapshot.moves().size(),gen,token));}}
             }catch(InterruptedException cancelled){Thread.currentThread().interrupt();}
-            catch(Exception e){synchronized(CaptureService.this){if(token!=searchEpoch.get()||gen!=epoch.get()||destroyed)return;ChessEngine old=engine;engine=null;activeEngineSettings=null;if(old!=null)old.close();analyzedPosition=null;analysisComplete=false;engineStartedAt=0;lastAnalysis=null;}main.post(()->{if(panel!=null&&token==searchEpoch.get())panel.message("Caissa недоступна · "+e.getMessage());});}
+            catch(Exception e){synchronized(CaptureService.this){if(token!=searchEpoch.get()||gen!=epoch.get()||destroyed)return;ChessEngine old=engine;engine=null;activeEngineSettings=null;if(old!=null)old.close();analyzedPosition=null;analysisComplete=false;engineStartedAt=0;lastAnalysis=null;}main.post(()->{if(panel!=null&&token==searchEpoch.get())panel.message("Движок недоступен · "+e.getMessage());});}
         });
     }
     private boolean cleanFrame(){return cleanFrames.accept(System.nanoTime());}
     private synchronized void showArrow(Position p,Analysis a,long gen,long token){
-        if(destroyed||paused||!boardVerified||!playerSide.ownsTurn(p)||selecting||preparingSelection||gen!=epoch.get()||token!=searchEpoch.get()||!analysisComplete||guide!=null||!prefs().getBoolean("arrows",true))return;
+        if(destroyed||paused||!boardVerified||!playerSide.ownsTurn(p)||selecting||preparingSelection||gen!=epoch.get()||token!=searchEpoch.get()||!analysisComplete||guide!=null||!prefs().getBoolean("arrows",true)||EngineFactory.settings(this).advice()==AdviceStyle.IDEAS||hintVisibility.hidden(p))return;
         Confirmed snapshot=confirmed;if(snapshot==null||!snapshot.position().fen().equals(p.fen()))return;Frame clean=snapshot.frame();BoardVision.Region selected=region;Move move=a.bestMove();
         if(clean==null||selected==null||move==null||!p.legalMoves().contains(move)||panel.overlaps(selected))return;
         try{ArrowGeometry shape=new ArrowGeometry(selected,move,whiteBottom);arrowActive.set(true);arrows.show(shape);guide=new Guide(shape,clean);}

@@ -7,10 +7,13 @@ import java.io.*;
 public final class BoardVision {
     private static final int N=24;
     public record Region(int left,int top,int size) { public boolean inside(int w,int h){return size>=160&&left>=0&&top>=0&&left+size<=w&&top+size<=h;} }
-    public record Feature(float[] mask,float ink,float occupancy,float[] silhouette,float[] normalized) {
+    public record Feature(float[] mask,float ink,float occupancy,float[] silhouette,float[] normalized,boolean moveIndicator) {
         public Feature(float[] mask,float ink,float occupancy){this(mask,ink,occupancy,canonical(mask),normalize(mask));}
+        public Feature(float[] mask,float ink,float occupancy,float[] silhouette,float[] normalized){this(mask,ink,occupancy,silhouette,normalized,false);}
     }
-    public record Observation(char[] board,float confidence,int uncertain) {}
+    public record Observation(char[] board,float confidence,int uncertain,int moveIndicators) {
+        public Observation(char[] board,float confidence,int uncertain){this(board,confidence,uncertain,0);}
+    }
     private record Template(char piece,Feature feature) {}
     private final List<Template> templates=new ArrayList<>();
     private final boolean whiteBottom;
@@ -69,16 +72,17 @@ public final class BoardVision {
     }
     public Observation recognize(int[] pixels,int w,int h,Region region){
         if(templates.isEmpty()||!region.inside(w,h))throw new IllegalStateException("Нужна калибровка");
-        char[] board=new char[64];float confidence=1f;int uncertain=0;
+        char[] board=new char[64];float confidence=1f;int uncertain=0,indicators=0;
         for(int display=0;display<64;display++){
             Feature f=extract(pixels,w,region,display,interiorTone);char best='.';float first=Float.MAX_VALUE,second=Float.MAX_VALUE;
+            if(f.moveIndicator())indicators++;
             if(f.occupancy()<0.045f){board[whiteBottom?display:63-display]='.';continue;}
             Map<Character,Float> scores=new HashMap<>();for(Template t:templates)scores.merge(t.piece(),distance(f,t.feature()),Math::min);
             for(var s:scores.entrySet()){if(s.getValue()<first){second=first;first=s.getValue();best=s.getKey();}else if(s.getValue()<second)second=s.getValue();}
             float c=Math.min(1f,Math.min((second-first)/Math.max(0.018f,second),1f-first/0.30f));
             if(first>0.13f||c<0.16f){uncertain++;c=0f;}
             board[whiteBottom?display:63-display]=best;confidence=Math.min(confidence,Math.max(0f,c));
-        }return new Observation(board,confidence,uncertain);
+        }return new Observation(board,confidence,uncertain,indicators);
     }
     public static Feature extract(int[] pixels,int w,Region region,int square){
         return extract(pixels,w,region,square,false);
@@ -111,15 +115,16 @@ public final class BoardVision {
         // A selected piece adds translucent, filled disks on empty destination
         // squares. Require a small centered round shape AND a neutral blend of
         // the square colour; do not globally lower piece occupancy thresholds.
-        if(foreground>=8&&foreground<=150&&isMoveDot(mask,pixels,w,x0,y0,cell,br,bg,bb)){
+        boolean moveIndicator=foreground>=8&&foreground<=150&&isMoveDot(mask,pixels,w,x0,y0,cell,br,bg,bb);
+        if(moveIndicator){
             Arrays.fill(mask,0);occupied=0;ink=0;foreground=0;
         }
-        Feature feature=new Feature(mask,occupied>0?ink/occupied:0,foreground/(float)(N*N));
+        Feature feature=new Feature(mask,occupied>0?ink/occupied:0,foreground/(float)(N*N),canonical(mask),normalize(mask),moveIndicator);
         if(!interiorTone)return feature;
         // White filling on a very light square has little contrast. Measuring only
         // contrasting pixels sees its black outline and confuses it with a black piece.
         float tone=0,mass=0;for(int i=0;i<N*N;i++){float filled=feature.silhouette()[i];tone+=filled*lightness[i];mass+=filled;}
-        return new Feature(mask,mass>0?tone/mass:feature.ink(),feature.occupancy(),feature.silhouette(),feature.normalized());
+        return new Feature(mask,mass>0?tone/mass:feature.ink(),feature.occupancy(),feature.silhouette(),feature.normalized(),moveIndicator);
     }
     private static boolean isMoveDot(float[] mask,int[] pixels,int width,int x0,int y0,float cell,int br,int bg,int bb){
         int minX=N,minY=N,maxX=-1,maxY=-1,count=0;

@@ -13,15 +13,17 @@ public final class FakeUci {
     private static int variations=1,threads,hash;
     private static boolean gameReady,loaded;
     private static String mode="normal";
+    private static boolean texel;
     private static synchronized void emit(String text){System.out.println(text);System.out.flush();}
     public static void main(String[] args)throws Exception{
         if(args.length>0)mode=args[0];
+        if(mode.startsWith("texel-")){texel=true;mode=mode.substring(6);loaded=true;}
         try(BufferedReader in=new BufferedReader(new InputStreamReader(System.in))){String command;while((command=in.readLine())!=null){
             if(args.length>1)Files.writeString(Path.of(args[1]),command+"\n",StandardOpenOption.CREATE,StandardOpenOption.APPEND);
             if(command.equals("uci")){
-                emit("id name "+(mode.equals("wrong-engine")?"Other engine":"Caissa 2.0 ARM NEON fixture"));
-                for(String option:new String[]{"EvalFile","EvalRandomization","Ponder","UseSAN","ColorConsoleOutput","UCI_Chess960","MoveOverhead","Threads","Hash","MultiPV"})
-                    if(!mode.equals("missing-option")||!option.equals("EvalFile"))emit("option name "+option+" type string default test");
+                emit("id name "+(mode.equals("wrong-engine")?"Other engine":texel?"Texel 1.12":"Caissa 2.0 ARM NEON fixture"));
+                for(String option:texel?new String[]{"Ponder","OwnBook","UCI_AnalyseMode","UCI_LimitStrength","UCI_Elo","Strength","MaxNPS","Clear Hash","Threads","Hash","MultiPV"}:new String[]{"EvalFile","EvalRandomization","Ponder","UseSAN","ColorConsoleOutput","UCI_Chess960","MoveOverhead","Threads","Hash","MultiPV"})
+                    if(!mode.equals("missing-option")||!option.equals(texel?"UCI_Elo":"EvalFile"))emit("option name "+option+" type string default test");
                 emit("uciok");
             }else if(command.equals("isready")){gameReady=true;emit("readyok");}
             else if(command.equals("ucinewgame"))gameReady=false;
@@ -31,7 +33,7 @@ public final class FakeUci {
             else if(command.startsWith("setoption name Hash value "))hash=Integer.parseInt(command.substring(command.lastIndexOf(' ')+1));
             else if(command.startsWith("setoption name MultiPV value "))variations=Integer.parseInt(command.substring(command.lastIndexOf(' ')+1));
             else if(command.startsWith("setoption name ")){
-                if(command.contains("Skill")||command.contains("LimitStrength")||command.contains("searchmoves"))throw new AssertionError("Unsupported engine setting");
+                if(command.contains("Skill")||!texel&&command.contains("LimitStrength")||command.contains("searchmoves")||texel&&command.contains("EvalFile"))throw new AssertionError("Unsupported engine setting");
             }else if(command.startsWith("position ")){
                 String[] parts=command.substring(9).split(" moves ",2);
                 position=parts[0].equals("startpos")?Position.start():Position.fromFen(parts[0].substring(4));
@@ -49,6 +51,12 @@ public final class FakeUci {
                     emit("info depth 12 multipv 1 score cp 999 lowerbound nodes 110 pv "+first.uci());
                     emit("info depth 12 multipv 2 score cp");
                     if(variations>=3){Move second=legal.contains(Move.parse("d2d4"))?Move.parse("d2d4"):legal.contains(Move.parse("d7d5"))?Move.parse("d7d5"):legal.get(legal.get(0).equals(first)?1:0);best=second;emit("info depth 8 multipv 2 score cp 10 nodes 120 pv "+second.uci());}
+                }
+                if(mode.equals("varied")){
+                    if(variations!=3)throw new AssertionError("Varied search needs MultiPV 3");
+                    best=first;
+                    String[] alternatives=position.white?new String[]{"e2e4","d2d4","g1f3"}:new String[]{"e7e5","d7d5","g8f6"};
+                    for(int index=0;index<3;index++)emit("info depth 10 multipv "+(index+1)+" score cp "+(35-index*15)+" nodes 300 pv "+alternatives[index]);
                 }
                 String result=mode.equals("illegal")?"e2e5":mode.equals("unreported")?"g1h3":best.uci();
                 if(mode.equals("nullmove"))result="0000";

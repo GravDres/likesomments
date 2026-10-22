@@ -6,7 +6,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.function.Consumer;
 
-/** One sequential Caissa process. Never reuses an undrained or timed-out search. */
+/** One sequential local UCI process. Never reuses an undrained or timed-out search. */
 public final class UciEngine implements HistoryEngine {
     private final Process process;
     private final BufferedWriter input;
@@ -15,33 +15,42 @@ public final class UciEngine implements HistoryEngine {
     private String engineName;
     private final Set<String> options=new HashSet<>();
     private int configuredThreads,configuredVariations,configuredHash;
+    private final EngineKind kind;
+    private AdviceStyle adviceStyle=AdviceStyle.EXACT;
+    private SearchLevel searchLevel=SearchLevel.FULL;
     public UciEngine(File executable,File network,int threads,int variations,int hashMiB)throws Exception{
-        Objects.requireNonNull(network);
-        String path=network.getAbsolutePath();
-        if(!network.isFile()||path.indexOf('\n')>=0||path.indexOf('\r')>=0)throw new IOException("Нет файла сети Caissa");
+        this(executable,EngineKind.CAISSA,network,threads,variations,hashMiB);
+    }
+    public UciEngine(File executable,EngineKind kind,File network,int threads,int variations,int hashMiB)throws Exception{
+        this.kind=Objects.requireNonNull(kind);
+        String path=network==null?null:network.getAbsolutePath();
+        if(kind==EngineKind.CAISSA&&(path==null||!network.isFile()||path.indexOf('\n')>=0||path.indexOf('\r')>=0))throw new IOException("Нет файла сети Caissa");
         process=new ProcessBuilder(executable.getAbsolutePath()).redirectErrorStream(true).start();
         input=new BufferedWriter(new OutputStreamWriter(process.getOutputStream(),StandardCharsets.UTF_8));
         Thread reader=new Thread(()->{
             try(BufferedReader r=new BufferedReader(new InputStreamReader(process.getInputStream(),StandardCharsets.UTF_8))){
                 String line;while((line=r.readLine())!=null&&!closed){if(!output.offer(line)){close();break;}}
             }catch(IOException ignored){}
-        },"caissa-output");reader.setDaemon(true);reader.start();
+        },"chess-uci-output");reader.setDaemon(true);reader.start();
         try{
             send("uci");await("uciok",15000,line->{
                 if(line.startsWith("id name "))engineName=line.substring(8).trim();
                 if(line.startsWith("option name ")&&line.contains(" type "))options.add(line.substring(12,line.indexOf(" type ")));
             });
-            if(engineName==null||!engineName.startsWith("Caissa 2.0 "))throw new IOException("В APK неверный движок: требуется Caissa 2.0");
+            if(!kind.matchesId(engineName))throw new IOException("В APK неверный движок: требуется "+kind.label());
             // Explicit DATA path. Require upstream's success acknowledgement, never HCE fallback.
-            set("EvalFile",path);send("isready");
+            if(kind==EngineKind.CAISSA){set("EvalFile",path);send("isready");
             boolean[] loaded={false};await("readyok",15000,line->{if(line.equals("info string Loaded neural network: "+path))loaded[0]=true;});
             if(!loaded[0])throw new IOException("Caissa не загрузила нейросеть. Расчёт без сети отключён");
             set("EvalRandomization","0");set("Ponder","false");set("UseSAN","false");
-            set("ColorConsoleOutput","false");set("UCI_Chess960","false");set("MoveOverhead","20");
+            set("ColorConsoleOutput","false");set("UCI_Chess960","false");set("MoveOverhead","20");}
+            else{set("Ponder","false");set("OwnBook","false");set("UCI_AnalyseMode","false");set("UCI_LimitStrength","false");set("Strength","1000");set("MaxNPS","0");}
             configure(threads,variations,hashMiB);newGame();
         }catch(Exception e){close();throw e;}
     }
-    public String name(){return engineName==null?"Caissa 2.0":engineName;}
+    public String name(){return engineName==null?kind.label():engineName;}
+    public EngineKind kind(){return kind;}
+    public synchronized void setAdviceStyle(AdviceStyle style){adviceStyle=Objects.requireNonNull(style);}
     public boolean isRunning(){return !closed&&process.isAlive();}
     public synchronized void configure(int threads,int variations,int hashMiB)throws Exception{
         requireOpen();int t=Math.max(1,Math.min(4,threads)),v=variations==3?3:1,h=hashMiB<=64?64:hashMiB<=128?128:256;
@@ -55,13 +64,23 @@ public final class UciEngine implements HistoryEngine {
         }catch(Exception failed){close();throw failed;}
     }
     public synchronized void configure(int threads,int variations)throws Exception{configure(threads,variations,configuredHash);}
-    /** Only a new game clears search memory. Every move receives the complete known history. */
-    public synchronized void newGame()throws Exception{requireOpen();send("ucinewgame");send("isready");await("readyok",8000,s->{});}
+    /** Switching strength clears old search work; the next request supplies the full game history. */
+    public synchronized void setSearchLevel(SearchLevel level)throws Exception{
+        Objects.requireNonNull(level);
+        requireOpen();
+        if(searchLevel==level)return;
+        try{
+            if(kind==EngineKind.TEXEL){set("UCI_LimitStrength",level==SearchLevel.FULL?"false":"true");set("UCI_Elo",Integer.toString(level.texelElo()));}
+            newGame();searchLevel=level;
+        }catch(Exception failure){close();throw failure;}
+    }
+    /** Clears native search memory for a new game or changed level; app history is retained. */
+    public synchronized void newGame()throws Exception{requireOpen();if(kind==EngineKind.TEXEL){if(!options.contains("Clear Hash"))throw new IOException("Texel не поддерживает Clear Hash");send("setoption name Clear Hash");}send("ucinewgame");send("isready");await("readyok",8000,s->{});}
     private void set(String name,String value)throws IOException{
         if(!options.contains(name))throw new IOException("Caissa не поддерживает параметр "+name);
         send("setoption name "+name+" value "+value);
     }
-    private void requireOpen()throws IOException{if(closed||!process.isAlive())throw new IOException("Caissa остановлена");}
+    private void requireOpen()throws IOException{if(closed||!process.isAlive())throw new IOException(kind.label()+" остановлен");}
     private void send(String command)throws IOException{requireOpen();input.write(command);input.newLine();input.flush();}
     private void await(String expected,int millis,Consumer<String> observer)throws Exception{
         long end=System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(millis);
@@ -69,10 +88,10 @@ public final class UciEngine implements HistoryEngine {
             requireOpen();String line=output.poll(50,TimeUnit.MILLISECONDS);if(line==null)continue;
             if(line.equals(expected))return;checkError(line);observer.accept(line);
         }
-        throw new IOException("Caissa не ответила: "+expected);
+        throw new IOException(kind.label()+" не ответил: "+expected);
     }
     private static void checkError(String line)throws IOException{
-        if(line.startsWith("Invalid ")||line.startsWith("ERROR")||line.startsWith("Error:"))throw new IOException("Ошибка протокола Caissa");
+        if(line.startsWith("Invalid ")||line.startsWith("ERROR")||line.startsWith("Error:"))throw new IOException("Ошибка протокола UCI");
     }
     public synchronized void analyze(Position p,int millis,Consumer<Analysis> progress)throws Exception{
         analyzeCommand(p,"position fen "+p.fen(),millis,progress);
@@ -93,7 +112,8 @@ public final class UciEngine implements HistoryEngine {
         if(millis<1||millis>8000)throw new IllegalArgumentException("Неверный бюджет расчёта");
         List<Move> legal=p.legalMoves();
         if(legal.isEmpty()){progress.accept(new Analysis(name(),0,0,0,p.inCheck(p.white)?0:null,List.of()));return;}
-        output.clear();send(command);send("go movetime "+millis);
+        output.clear();send(command);long nodesLimit=kind==EngineKind.CAISSA?searchLevel.nodeLimit():0;
+        send("go movetime "+millis+(nodesLimit==0?"":" nodes "+nodesLimit));
         Map<Move,Analysis> known=new HashMap<>();Map<Integer,Analysis.Line> lines=new TreeMap<>();
         int depth=0;long nodes=0;Analysis published=null;
         long deadline=System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(millis+5000L);
@@ -102,14 +122,14 @@ public final class UciEngine implements HistoryEngine {
                 requireOpen();String line=output.poll(50,TimeUnit.MILLISECONDS);if(line==null)continue;checkError(line);
                 if(line.startsWith("bestmove ")){
                     String[] tokens=line.trim().split("\\s+");Move best;
-                    try{best=Move.parse(tokens[1]);}catch(IllegalArgumentException|IndexOutOfBoundsException bad){throw new IOException("Caissa вернула неверный ход",bad);}
-                    if(!legal.contains(best))throw new IOException("Ход Caissa недопустим в текущей позиции");
+                    try{best=Move.parse(tokens[1]);}catch(IllegalArgumentException|IndexOutOfBoundsException bad){throw new IOException(kind.label()+" вернул неверный ход",bad);}
+                    if(!legal.contains(best))throw new IOException("Ход "+kind.label()+" недопустим в текущей позиции");
                     Analysis answer=published!=null&&best.equals(published.bestMove())?published:known.get(best);
                     // UCI info is optional. Caissa can return immediately without a scored PV.
                     // Keep its legal final move, but never attach another move's score or line.
                     if(answer==null)answer=Analysis.moveOnly(name(),best);
                     if(Thread.currentThread().isInterrupted())throw new InterruptedException();
-                    progress.accept(answer);return;
+                    progress.accept(TrainingChoice.select(p,answer,kind,adviceStyle));return;
                 }
                 if(!line.startsWith("info ")||!line.contains(" pv ")||line.contains("lowerbound")||line.contains("upperbound"))continue;
                 String[] t=line.trim().split("\\s+");int rank=1,d=0,cp=0;Integer mate=null;long n=nodes;boolean scored=false;List<Move> pv=new ArrayList<>();
@@ -132,7 +152,7 @@ public final class UciEngine implements HistoryEngine {
                     }
                 }catch(IllegalArgumentException|IndexOutOfBoundsException malformed){}
             }
-            throw new IOException("Caissa не завершила расчёт вовремя");
+            throw new IOException(kind.label()+" не завершил расчёт вовремя");
         }catch(InterruptedException cancelled){
             // Drain exactly this search. A future query must never consume its bestmove.
             Thread.interrupted();try{send("stop");awaitBestMove();}catch(Exception failure){close();}
@@ -142,7 +162,7 @@ public final class UciEngine implements HistoryEngine {
     private void awaitBestMove()throws Exception{
         long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(2);
         while(System.nanoTime()<end){requireOpen();String line=output.poll(50,TimeUnit.MILLISECONDS);if(line!=null&&line.startsWith("bestmove "))return;}
-        throw new IOException("Caissa не остановилась");
+        throw new IOException(kind.label()+" не остановился");
     }
     /** Nonblocking even when the native process is stuck; safe from the Android main thread. */
     public void close(){closed=true;process.destroyForcibly();}

@@ -25,6 +25,10 @@ public final class MoveIndicatorTest {
         Position old=Position.fromFen("2r1kb1r/1p1q1ppp/p1n5/1N1pP3/Q7/3RB3/PP3PPP/1K5R w k - 0 17");
         BoardVision vision=new BoardVision(true).learnConfirmed(training,n,n,region,old);
         var seen=vision.recognize(pixels,n,n,region);assertBoard(PHOTO,seen,"reported selected knight retains all 64 cells");
+        check(seen.moveIndicators()==7,"reported selected board exposes seven already filtered move indicators");
+        HintVisibility hints=new HintVisibility();hints.confirmed(PHOTO);
+        check(hints.markers(PHOTO,seen.moveIndicators())&&hints.hidden(PHOTO),"reported frame hides hint without an Android touch event");
+        hints.reveal();hints.markers(PHOTO,seen.moveIndicators());check(!hints.hidden(PHOTO),"explicit reveal survives same selected screenshot");
         for(String square:new String[]{"c6","e6","b5","f5","b3","f3","e2"})check(seen.board()[Position.index(square)]=='.',"reported marker is empty: "+square);
         check(seen.board()[Position.index("d4")]=='N',"selected knight remains a knight");
         var found=new BoardLocator().find(pixels,n,n);check(found!=null&&found.automatic(),"board still located with legal-move dots");assertBoard(PHOTO,vision.recognize(pixels,n,n,found.region()),"automatic region retains correct pieces");
@@ -52,7 +56,7 @@ public final class MoveIndicatorTest {
                 int[] pixels=clean.clone();for(String square:new String[]{"c6","e6","b5","f5","b3","f3","e2"})dot(pixels,n,Position.index(square),flipped,radius,alpha,light);
                 assertBoard(PHOTO,vision.recognize(pixels,n,n,region),"dots theme="+theme+" flipped="+flipped+" radius="+radius+" alpha="+alpha+" light="+light);
             }
-            assertBoard(PHOTO,vision.recognize(clean,n,n,region),"deselection restores same position without recalibration");
+            var deselected=vision.recognize(clean,n,n,region);assertBoard(PHOTO,deselected,"deselection restores same position without recalibration");check(deselected.moveIndicators()==0,"clean board has no selection indicators");
         }
     }
     private static void negativeFrames(){
@@ -61,7 +65,7 @@ public final class MoveIndicatorTest {
             assertBoard(PHOTO,vision.recognize(LichessTest.render(PHOTO,n,flipped,0,false,true,null),n,n,region),"no-marker pieces unchanged");
             for(char piece:new char[]{'P','p','N','n','B','b','R','r','Q','q'}){
                 char[] board=PHOTO.pieces();board[Position.index("e6")]=piece;Position added=Position.fromDiagram(board,true,0,-1,0,6);
-                int[] pixels=LichessTest.render(added,n,flipped,0,false,true,null);var seen=vision.recognize(pixels,n,n,region);assertBoard(added,seen,"real piece must not be erased as dot: "+piece);
+                int[] pixels=LichessTest.render(added,n,flipped,0,false,true,null);var seen=vision.recognize(pixels,n,n,region);assertBoard(added,seen,"real piece must not be erased as dot: "+piece);check(seen.moveIndicators()==0,"real piece does not fake a selection event");
                 GameTracker game=GameTracker.replay(Arrays.stream(OPENING).map(Move::parse).toList());check(game.accept(seen.board()).status()==GameTracker.Status.UNRECOGNIZED&&game.position().fen().equals(PHOTO.fen()),"a new piece cannot be hidden to invent unchanged board");
             }
             Position moved=PHOTO.play(Move.parse("d4b5"));var seen=vision.recognize(LichessTest.render(moved,n,flipped,0,false,true,null),n,n,region);assertBoard(moved,seen,"actual knight move retained");

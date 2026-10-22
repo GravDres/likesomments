@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline tests for release asset verification, ZIP migration and Caissa-only packaging."""
+"""Offline tests for release asset verification, ZIP migration and local-engine packaging."""
 import copy
 import hashlib
 import importlib.util
@@ -118,6 +118,8 @@ class CaissaBuildTest(unittest.TestCase):
         script = self.project_script('package-source.py')
         names = ['README.md', 'third_party/Caissa-2.0/src/main.cpp',
                  'third_party/Caissa-2.0/data/neuralNets/network.pnn',
+                 'third_party/Texel-1.12/app/texel/main.cpp', 'third_party/Texel-1.12/nndata.tbin.compr',
+                 'third_party/Texel-1.12/.git/config', 'third_party/Texel-1.12/build/texel',
                  'third_party/Caissa-2.0/.git/config', 'third_party/Caissa-2.0/bin/caissa',
                  'third_party/Caissa-2.0/object.o', 'third_party/Stockfish-sf_19/Copying.txt',
                  '.hod-signing/private.p12', 'private.p12', 'keystore-password.txt']
@@ -129,9 +131,9 @@ class CaissaBuildTest(unittest.TestCase):
         subprocess.run([sys.executable, script, '--with-engine', '--output', output], check=True, capture_output=True)
         with zipfile.ZipFile(output) as archive:
             entries = archive.namelist()
-        for included in names[:3]:
+        for included in names[:5]:
             self.assertIn(included, entries)
-        for excluded in names[3:]:
+        for excluded in names[5:]:
             self.assertNotIn(excluded, entries)
 
     def test_apk_verifier_detects_corruption_and_retired_runtime(self):
@@ -152,14 +154,20 @@ class CaissaBuildTest(unittest.TestCase):
                   'binary.sha256': hashlib.sha256(binary).hexdigest(),
                   'network': 'eval-ml-8-152B-spsa.pnn', 'network.bytes': len(network),
                   'network.sha256': hashlib.sha256(network).hexdigest()}
+        texel = {'version': '1.12', 'commit': 'bd5698c67f3c1841db623296cfd49d4a37abd5a3', 'abi': 'arm64-v8a', 'target': 'aarch64-neon', 'binary.sha256': hashlib.sha256(binary).hexdigest(), 'network': 'nndata.tbin.compr', 'network.embedded': True, 'network.bytes': 10000, 'network.sha256': 'b' * 64}
         base = {'lib/arm64-v8a/libcaissa.so': binary,
+                'lib/arm64-v8a/libtexel.so': binary,
+                'assets/texel/provenance.json': json.dumps(texel).encode(),
+                'assets/texel/engine.properties': ('\n'.join(f'{k}={v}' for k, v in texel.items())).encode(),
+                'assets/licenses/Texel-GPL-3.txt': b'license fixture ' * 3,
+                'assets/licenses/Texel-SOURCE.txt': b'attribution fixture ' * 3,
                 'assets/caissa/provenance.json': json.dumps(report).encode(),
                 'assets/caissa/engine.properties': ('\n'.join(f'{k}={v}' for k, v in report.items())).encode(),
                 'assets/caissa/' + report['network']: network,
                 'assets/licenses/Caissa-MIT.txt': b'license fixture ' * 3,
                 'assets/licenses/Caissa-SOURCE.txt': b'attribution fixture ' * 3,
                 'AndroidManifest.xml': b'Android manifest fixture',
-                'classes.dex': b'org.lichess.mobileV2 Lru/hod/chess/RootCaptureMain; Lru/hod/chess/core/RootCaptureWire; Lru/hod/chess/core/PanelPlacement; Lru/hod/chess/core/UciEngine; Lru/hod/chess/LegacyUpgrade;'}
+                'classes.dex': b'org.lichess.mobileV2 Lru/hod/chess/RootCaptureMain; Lru/hod/chess/core/RootCaptureWire; Lru/hod/chess/core/PanelPlacement; Lru/hod/chess/core/UciEngine; Lru/hod/chess/LegacyUpgrade; Lru/hod/chess/core/TrainingChoice; Lru/hod/chess/core/EngineKind; Lru/hod/chess/core/PositionCoach; Lru/hod/chess/core/HintVisibility; Lru/hod/chess/core/ExchangeSafety;'}
         def archive(files):
             path = self.work / 'fixture.apk'
             with zipfile.ZipFile(path, 'w') as output:
@@ -171,6 +179,9 @@ class CaissaBuildTest(unittest.TestCase):
         changes = [('assets/caissa/' + report['network'], b'damaged network'),
                    ('lib/arm64-v8a/libcaissa.so', bytes(binary) + b'changed'),
                    ('lib/arm64-v8a/libstockfish.so', binary),
+                   ('lib/arm64-v8a/libtexel.so', bytes(binary) + b'changed'),
+                   ('assets/texel/provenance.json', json.dumps(dict(texel, commit='wrong')).encode()),
+                   ('assets/texel/provenance.json', json.dumps(dict(texel, **{'network.embedded': False})).encode()),
                    ('AndroidManifest.xml', 'android.permission.INTERNET'.encode('utf-16le')),
                    ('classes.dex', base['classes.dex'] + b'Lru/hod/chess/core/ApiEngine;')]
         for key, data in changes:
@@ -187,7 +198,7 @@ class CaissaBuildTest(unittest.TestCase):
         self.assertEqual((ROOT / 'config/signing-certificate.sha256').read_text().strip(), '5063e2ff5159bef0bbe90158f6c5037c1959e826097338fe37db55e13e47dc14')
         gradle = (ROOT / 'app/build.gradle').read_text()
         self.assertNotIn("implementation 'com.microsoft.onnxruntime", gradle)
-        self.assertIn('versionCode 25', gradle)
+        self.assertIn('versionCode 28', gradle)
         self.assertIn('signingConfig signingConfigs.persistent', gradle)
 
 

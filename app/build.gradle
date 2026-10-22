@@ -6,7 +6,7 @@ android {
     compileSdk 36
     buildToolsVersion '36.0.0'
     ndkVersion '28.2.13676358'
-    defaultConfig { applicationId 'ru.hod.chess'; minSdk 29; targetSdk 36; versionCode 25; versionName '0.25.0'; ndk { abiFilters 'arm64-v8a' } }
+    defaultConfig { applicationId 'ru.hod.chess'; minSdk 29; targetSdk 36; versionCode 28; versionName '0.28.0'; ndk { abiFilters 'arm64-v8a' } }
     signingConfigs {
         persistent {
             if (hodSigningStore) storeFile file(hodSigningStore)
@@ -37,8 +37,8 @@ tasks.register('verifyEngine') {
             throw new GradleException('Retired engines found. Run python3 scripts/clean-legacy.py before building.')
         }
         if (!project.hasProperty('compactOnly')) {
-            for (name in ['src/main/jniLibs/arm64-v8a/libcaissa.so', 'src/main/assets/caissa/eval-ml-8-152B-spsa.pnn', 'src/main/assets/caissa/engine.properties']) {
-                if (!file(name).isFile()) throw new GradleException('Caissa is missing. Run bash scripts/build-caissa.sh before building.')
+            for (name in ['src/main/jniLibs/arm64-v8a/libcaissa.so', 'src/main/assets/caissa/eval-ml-8-152B-spsa.pnn', 'src/main/assets/caissa/engine.properties', 'src/main/jniLibs/arm64-v8a/libtexel.so', 'src/main/assets/texel/engine.properties']) {
+                if (!file(name).isFile()) throw new GradleException('Engine bundle is missing. Run bash scripts/build-caissa.sh and bash scripts/build-texel.sh before building.')
             }
         }
     }

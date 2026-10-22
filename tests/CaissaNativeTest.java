@@ -47,6 +47,12 @@ public final class CaissaNativeTest {
                 check(start.play(Move.parse("e2e4")).legalMoves().contains(resumed.bestMove()),"real cancellation resumes for Black");
             }finally{queue.shutdownNow();}
             engine.newGame();engine.configure(1,3,64);analyze(engine,start,300);
+            engine.configure(2,1,128);
+            for(SearchLevel level:SearchLevel.values()){
+                engine.setSearchLevel(level);Analysis budgeted=analyze(engine,start,600);
+                if(level.nodeLimit()>0&&budgeted.hasSearchEvaluation())
+                    check(budgeted.nodes()<=level.nodeLimit()+8192,"real node budget respected within periodic multi-thread stop checks");
+            }
         }
         System.out.println("PASS: "+checks+" real Caissa 2.0 host assertions; Android device speed/strength not measured");
     }
